@@ -1,0 +1,31 @@
+--- #YAML:1.0
+name: Term-ReadLine-Zoid
+version: 0.01
+author:
+  - Jaap Karssenberg <pardus@cpan.org>
+abstract: another ReadLine package
+license: perl
+requires:
+  AutoLoader: 0
+  Term::ReadKey: 0
+recommends:
+  File::Temp: 0
+build_requires:
+  AutoSplit: 0
+provides:
+  Term::ReadLine::Zoid:
+    file: lib/Term/ReadLine/Zoid.pm
+    version: 0.01
+  Term::ReadLine::Zoid::Base:
+    file: lib/Term/ReadLine/Zoid/Base.pm
+    version: 0.01
+  Term::ReadLine::Zoid::ISearch:
+    file: lib/Term/ReadLine/Zoid/ISearch.pm
+    version: 0.01
+  Term::ReadLine::Zoid::MultiLine:
+    file: lib/Term/ReadLine/Zoid/MultiLine.pm
+    version: 0.01
+  Term::ReadLine::Zoid::ViCommand:
+    file: lib/Term/ReadLine/Zoid/ViCommand.pm
+    version: 0.01
+generated_by: Module::Build version 0.24
