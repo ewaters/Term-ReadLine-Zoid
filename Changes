@@ -1,5 +1,11 @@
 Revision history for Term-ReadLine-Zoid - another ReadLine package
 
+0.07 Mon Nov 22 2004
+	Maintenance release, just one bugfix
+
+     Fri Oct 22
+	- Fixed a bug with the completion of quoted strings
+
 0.06 Wed Sep 15 2004
         - Fixed a bug in the clear_screen() function
 	- Touched documentation for FileBrowse

@@ -7,7 +7,7 @@ use Term::ReadLine::Zoid::Base;
 no warnings; # undef == '' down here
 
 our @ISA = qw/Term::ReadLine::Zoid::Base Term::ReadLine::Stub/; # explicitly not use'ing T:RL::Stub
-our $VERSION = '0.06';
+our $VERSION = '0.07';
 
 sub import { # terrible hack - Term::ReadLine in perl 5.6.x is defective
 	return unless (caller())[0] eq 'Term::ReadLine' and $] < 5.008 ;
@@ -589,7 +589,7 @@ sub complete {
 		if ($$meta{quote}) {
 			if (ref $$meta{quote}) { $compl = $$meta{quote}->($compl) } # should be code ref
 			else { # plain quote
-				$compl =~ s#\\\\|(?<!\\|^)($$meta{quote})#$1?"\\$1":'\\\\'#ge if $$meta{quote};
+				$compl =~ s#\\\\|(?<=[^\\])($$meta{quote})#$1?"\\$1":'\\\\'#ge if $$meta{quote};
 				$compl .= $$meta{quote} if !@compl and $compl =~ /\w$/; # arbitrary cruft
 			}
 		}

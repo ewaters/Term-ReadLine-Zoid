@@ -1,7 +1,8 @@
 --- #YAML:1.0
 name: Term-ReadLine-Zoid
-version: 0.06
-author: Jaap Karssenberg <pardus@cpan.org>
+version: 0.07
+author:
+  - Jaap Karssenberg <pardus@cpan.org>
 abstract: another ReadLine package
 license: perl
 requires:
@@ -14,7 +15,7 @@ build_requires:
 provides:
   Term::ReadLine::Zoid:
     file: lib/Term/ReadLine/Zoid.pm
-    version: 0.06
+    version: 0.07
   Term::ReadLine::Zoid::Base:
     file: lib/Term/ReadLine/Zoid/Base.pm
     version: 0.06
@@ -30,4 +31,4 @@ provides:
   Term::ReadLine::Zoid::ViCommand:
     file: lib/Term/ReadLine/Zoid/ViCommand.pm
     version: 0.05
-generated_by: Module::Build version 0.25
+generated_by: Module::Build version 0.2604
