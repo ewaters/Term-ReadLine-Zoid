@@ -6,7 +6,7 @@ use Term::ReadLine::Zoid::Base;
 no warnings; # undef == '' down here
 
 our @ISA = qw/Term::ReadLine::Zoid::Base Term::ReadLine::Stub/; # explicitly not using T:RL::Stub
-our $VERSION = '0.02';
+our $VERSION = '0.03';
 
 sub import { # terrible hack - Term::ReadLine 5.6.x is defective
 	return unless (caller())[0] eq 'Term::ReadLine' and $] < 5.008 ;
@@ -383,7 +383,7 @@ sub ctrl_u {
 }
 
 sub tab {
-	my ($self, $key) = @_;
+	my ($self, undef, $preview) = @_;
 
 	# check !autolist stuff
 	if ($$self{completions} && @{$$self{completions}}) {
@@ -420,14 +420,21 @@ sub tab {
 	else { @compl = $self->longest_match(@compl) } # returns $compl, @compl
 
 	my $compl = shift @compl;
+	$compl =~ s#\\\\|(?<!\\)($$meta{quoted})#$1?"\\$1":'\\\\'#ge if $$meta{quoted};
 	$compl = $$meta{prefix} . $compl;
 	if (@compl) {
-		if ($$self{config}{autolist}) { $self->output( @compl ) }
+		if ($$self{config}{autolist} || $preview) {
+			$self->output( @compl );
+			return if $preview;
+		}
 		else { $$self{completions} = \@compl }
+		$compl =~ s{\\\\|(?<!\\)([\s\*\?\[\]\{\}'"])}{$1?"\\$1":'\\\\'}eg
+			unless $$meta{quoted};
 	}
 	else {
 		$compl .= $$meta{postfix};
-		$compl =~ s{([\s\*\?\[\]\{\}])}{\\$1}g unless $$meta{quoted};
+		$compl =~ s{\\\\|(?<!\\)([\s\*\?\[\]\{\}'"])}{$1?"\\$1":'\\\\'}eg
+			unless $$meta{quoted};
 		$compl .= $$meta{quoted}.' ' if $compl =~ /\w$/; # arbitrary cruft
 	}
 

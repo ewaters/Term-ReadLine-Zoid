@@ -1,5 +1,10 @@
 Revision history for Term-ReadLine-Zoid - another ReadLine package
 
+0.03 Tue Jun 29 2004
+        - Fixed a bug in the expansion code regarding escaping
+	- Fixed 'bindchr' and 'bindkey' vi commands
+	- Added code for '=', '*', and '\' keybindings in the vi mode
+
 0.02 Tue May 25 2004
 
      Mon May 24

@@ -264,28 +264,46 @@ sub vi_comment {
 
 =item =
 
-TODO
-
-Displays possible shell word completions.
-Does not modify the edit line.
+Display possible shell word completions, does not modify the edit line.
 
 =item \
 
-TODO
-
-Does pathname completion
+Do pathname completion (using File::Glob) and insert the largest matching
+part in the edit line.
 
 =item *
 
-TODO
-
-Does pathname completion but inserts B<all> matches.
+Do pathname completion but inserts B<all> matches.
 
 =cut
 
 sub vi_complete {
-	# note: is file completion using globs
-	$_[0]->switch_mode();
+	my ($self, $key) = @_;
+
+	return $self->tab(undef, 'PREVIEW') if $key eq '='; # TODO use globs
+
+	my $buffer = join "\n", @{$$self{lines}};
+	my $begin = substr $buffer, 0, $self->pos2off($$self{pos}), '';
+	$begin =~ s/(\S*)$//;
+	my $glob = $1;
+	$$self{pos}[0] -= length $1;
+
+	use File::Glob ':glob';
+	$glob .= '*' unless $glob =~ /[\*\?\[]/;
+	my @list = bsd_glob($glob, GLOB_TILDE | GLOB_BRACE);
+
+	my $string;
+	if ($key eq '\\') {
+		@list = $self->longest_match(@list);
+		$string = shift(@list);
+		$self->output(@list);
+	}
+	elsif ($key eq '*') { $string = join ' ', @list }
+
+	$$self{pos}[0] += length $string;
+	@{$$self{lines}} = split /\n/, $begin . $string . $buffer;
+	
+	$self->switch_mode() if $key eq '*';
 }
 
 =item [I<count>] @ I<char>
@@ -598,7 +616,7 @@ sub vi_topic {
 	return $self->bell unless @{$$self{history}};
 	my $buffer = join "\n", $$self{history}[0];
 	$buffer =~ s/^\s+|\s+$//g;
-	@words = split /\s+/, $buffer;
+	my @words = split /\s+/, $buffer;
 	my $string = " $words[$cnt]";
 	$self->substring($string);
 	$$self{pos}[0] .= length $string;
@@ -989,8 +1007,21 @@ Map a char (or char sequence) to a key name.
 
 sub bindchr {
 	my $self = shift;
-	$self->bind_chr(split/=/, $_[0]);
+	$self->SUPER::bindchr(split /=/, $_[0]);
 }
+
+=item B<bindkey> I<chr>=sub { I<code> }
+
+Map a char (or char sequence) to a key name.
+
+=cut
+
+sub bindkey {
+	my $self = shift;
+	my @arg = split /=/, $_[0], 2;
+	$self->SUPER::bindkey($arg[0], eval $arg[1]);
+}
+
 
 =item B<!>, B<shell> I<shellcode>
 
