@@ -1,5 +1,15 @@
 Revision history for Term-ReadLine-Zoid - another ReadLine package
 
+0.04 Sun Jul  4 2004
+        - Made cursor position take control chars into account
+	- Reversed the output of GetHistory after testing with cpan(1)
+
+     Thu Jul  1
+        - Fixed a bug, escaped returns are now really removed
+	- Fixed a bug, expansion works again in a non-zoid application,
+	like cpan(1)
+	- Added pager support for long lists of completions
+
 0.03 Tue Jun 29 2004
         - Fixed a bug in the expansion code regarding escaping
 	- Fixed 'bindchr' and 'bindkey' vi commands

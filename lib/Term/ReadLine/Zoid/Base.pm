@@ -5,7 +5,7 @@ no warnings;
 use Term::ReadKey qw/ReadMode ReadKey GetTerminalSize/;
 no warnings; # undef == '' down here
 
-our $VERSION = '0.02';
+our $VERSION = '0.04';
 
 $| = 1;
 
@@ -256,7 +256,16 @@ sub output {
 	else { @items = split /\n/, $items[0] }
 
 	$$self{_buffer} = (@items < $$self{_buffer}) ? ($$self{_buffer} - @items) : 0;
-	print { $$self{OUT} } join("\n", @items), "\n";
+	if (@items > $$self{term_size}[1]) {
+		my $pager = $ENV{PAGER} || 'more';
+		eval {
+			local $SIG{PIPE} = 'IGNORE';
+			open PAGER, "| $pager" || die;
+			print PAGER join("\n", @items), "\n";
+			close PAGER;
+		} ;
+	}
+	else { print { $$self{OUT} } join("\n", @items), "\n" }
 }
 
 sub col_format { # takes minimum number of rows, but fills cols first

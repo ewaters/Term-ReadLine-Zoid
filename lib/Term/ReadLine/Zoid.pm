@@ -6,7 +6,7 @@ use Term::ReadLine::Zoid::Base;
 no warnings; # undef == '' down here
 
 our @ISA = qw/Term::ReadLine::Zoid::Base Term::ReadLine::Stub/; # explicitly not using T:RL::Stub
-our $VERSION = '0.03';
+our $VERSION = '0.04';
 
 sub import { # terrible hack - Term::ReadLine 5.6.x is defective
 	return unless (caller())[0] eq 'Term::ReadLine' and $] < 5.008 ;
@@ -115,7 +115,7 @@ sub _return { # also used by continue
 	$self->AddHistory($string) if $$self{config}{autohistory};
 	return '' if $$self{config}{ignore_comment}
 		and ! grep {$_ !~ /^\s*\Q$$self{config}{ignore_comment}\E/} @{$$self{lines}};
-	$string =~ s/(\\\\)\n|\\\n/$1?"\\\n":"\n"/ge if $$self{config}{automultiline};
+	$string =~ s/\\\n//ge if $$self{config}{automultiline};
 	#print STDERR "string: $string\n";
 	return $string;
 }
@@ -153,7 +153,11 @@ sub Features { {
 # Extended api #
 # ############ #
 
-sub GetHistory { return wantarray ? (@{$_[0]{history}}) : $_[0]{history} }
+sub GetHistory {
+	return wantarray 
+		? ( reverse @{$_[0]{history}} )
+		: [ reverse @{$_[0]{history}} ] ;
+}
 
 sub SetHistory {
 	my $self = shift;
@@ -288,10 +292,21 @@ sub draw {
 		if $pos[0] > length $lines[ $pos[1] ];
 
 	# replace the non printables
-	@lines = map { s{([^[:print:]])}{
-		my $ord = ord $1;
-		($ord < 32) ? '^'.(chr $ord + 64) : '^?'
-	}ge; $_} @lines;
+	for (0 .. $#lines) {
+		if ($_ == $pos[1]) {
+			my $start = substr $lines[$_], 0, $pos[0], '';
+			my $n = ( $start =~ s{([^[:print:]])}{
+				my $ord = ord $1;
+				($ord < 32) ? '^'.(chr $ord + 64) : '^?'
+			}ge );
+			$pos[0] += $n;
+			$lines[$_] = $start . $lines[$_];
+		}
+		$lines[$_] =~ s{([^[:print:]\e])}{
+			my $ord = ord $1;
+			($ord < 32) ? '^'.(chr $ord + 64) : '^?'
+		}ge;
+	}
 
 	# render prompt - ugly "set nu" code by carl0s
 	my $prompt = ref($$self{prompt}) ? ${$$self{prompt}} : $$self{prompt};
@@ -428,12 +443,12 @@ sub tab {
 			return if $preview;
 		}
 		else { $$self{completions} = \@compl }
-		$compl =~ s{\\\\|(?<!\\)([\s\*\?\[\]\{\}'"])}{$1?"\\$1":'\\\\'}eg
+		$compl =~ s#\\\\|(?<!\\)([^\w\-\./~])#$1?"\\$1":'\\\\'#eg
 			unless $$meta{quoted};
 	}
 	else {
 		$compl .= $$meta{postfix};
-		$compl =~ s{\\\\|(?<!\\)([\s\*\?\[\]\{\}'"])}{$1?"\\$1":'\\\\'}eg
+		$compl =~ s#\\\\|(?<!\\)([^\w\-\./~])#$1?"\\$1":'\\\\'#eg
 			unless $$meta{quoted};
 		$compl .= $$meta{quoted}.' ' if $compl =~ /\w$/; # arbitrary cruft
 	}
@@ -441,7 +456,7 @@ sub tab {
 	# update buffer
 	push @{$$self{undostack}}, $self->save() if length $compl;
 #	print STDERR ">>$buffer<< end $end off: ".($end - $lw)." l: $lw c: $compl\n";
-	my $start = $$meta{start} or $end - $lw;
+	my $start = $$meta{start} || $end - $lw;
 	substr $buffer,  $start, $end - $start, $compl;
 	$$self{lines} = [ split /\n/, $buffer ];
 	$$self{pos}[0] -= $lw - length($compl); # for the moment completions can't contains \n
@@ -449,7 +464,7 @@ sub tab {
 
 sub longest_match { # cut doubles and find longest match
 	my ($self, @compl) = @_;
-	
+
 	@compl = sort @compl;
 	my $match = $compl[0];
 	while ($match and $compl[-1] !~ /^\Q$match\E/) { chop $match } # due to sort only one diff
@@ -630,9 +645,9 @@ expansion it doesn't do anything. See the L<completion_function> option.
 End editing and return the edit line to the application unless the newline is escaped.
 
 If _all_ lines in the buffer end with a single '\', the newline is considered escaped
-and a new line will be inserted at the end. This behaviour can be a bit unexpected
-because this module has multiline support which historic applications have not, historically
-the escaping of a newline is done by the application not by the readline library.
+you can continue typing on the next line. This behaviour can be a bit unexpected
+because this module has multiline support which historic readline implementations
+have not, historically the escaping of a newline is done by the application not by the library.
 The surpress this behaviour, and let the application do it's thing, disable the "automultiline"
 option.
 
@@ -974,6 +989,12 @@ With most modern keymappings the combination of the meta key (alt) with a letter
 is identical with an escape character followed by that letter.
 
 Some functioality may in time be moved to the ::Base package.
+
+=head1 TODO
+
+UTF8 support, or general charset support, would be nice but at the moment
+I lack the means to test these things. If anyone has ideas or suggestions about this
+please contact me.
 
 =head1 BUGS
 

@@ -8,7 +8,7 @@ use Term::ReadKey qw/ReadMode ReadKey GetTerminalSize/;
 use base 'Term::ReadLine::Zoid::MultiLine';
 no warnings; # undef == '' down here
 
-our $VERSION = 0.02;
+our $VERSION = 0.04;
 
 sub AUTOLOAD { # more intelligent inheritance
 	my $sub = $AUTOLOAD;
