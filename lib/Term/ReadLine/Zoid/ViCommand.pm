@@ -4,11 +4,10 @@ use strict;
 use vars '$AUTOLOAD';
 no strict 'refs';
 use AutoLoader;
-use Term::ReadKey qw/ReadMode ReadKey GetTerminalSize/;
-use base 'Term::ReadLine::Zoid::MultiLine';
+use base 'Term::ReadLine::Zoid';
 no warnings; # undef == '' down here
 
-our $VERSION = 0.04;
+our $VERSION = 0.05;
 
 sub AUTOLOAD { # more intelligent inheritance
 	my $sub = $AUTOLOAD;
@@ -48,27 +47,41 @@ Control-d is ignored in this mode.
 
 =cut
 
-# sub _on_switch { # actually defined in the dynamic key map
-# 	return $$self{_loop} = undef if $$self{_vi_mini_b};
-# 	$$self{vi_command}     = '';
-#	$$self{vi_history}   ||= [];
-#	$self->left if $$self{_loop} && $$self{pos}[0] != 0;
-#	return 'Term::ReadLine::Zoid::ViCommand';
-# }
+our %_keymap = (
+	return  => 'accept_line',
+	ctrl_D	=> 'bell',
+	ctrl_Z	=> 'sigtstp',
+	backspace => 'backward_char',
+	escape	=> 'vi_reset',
+	ctrl_A	=> 'vi_increment',
+	ctrl_X	=> 'vi_increment',
+	_on_switch => 'vi_switch',
+	_isa	=> 'multiline', # but wait .. self_insert is overloaded
+);
+
+sub keymap { return \%_keymap }
+
+sub vi_switch {
+	my $self = shift;
+	return $$self{_loop} = undef if $$self{_vi_mini_b};
+	$$self{vi_command}   = '';
+	$$self{vi_history} ||= [];
+	$self->backward_char unless $_[1] or $$self{pos}[0] == 0;
+}
 
 our @vi_motions = (' ', ',', qw/0 b F l W ^ $ ; E f T w | B e h t/);
 our %vi_subs = (
 	'#'  => 'vi_comment',		'='  => 'vi_complete',
 	'\\' => 'vi_complete',		'*'  => 'vi_complete',
 	'@'  => 'vi_macro',		'~'  => 'vi_case',
-	'.'  => 'vi_repeat',		' '  => 'right',
-	'^'  => 'vi_home',		'$'  => 'end',
-	'0'  => 'home',			'|'  => 'vi_cursor',
+	'.'  => 'vi_repeat',		' '  => 'forward_char',
+	'^'  => 'vi_home',		'$'  => 'end_of_line',
+	'0'  => 'beginning_of_line',	'|'  => 'vi_cursor',
 	';'  => 'vi_c_repeat',		','  => 'vi_c_repeat',
 	'_'  => 'vi_topic',		'-'  => 'vi_K',
 	'+'  => 'vi_J',
 	
-	'l'  => 'right',		'h' => 'left',
+	'l'  => 'forward_char',		'h' => 'backward_char',
 	't'  => 'vi_F',			'T' => 'vi_F',
 );
 our %vi_commands = (
@@ -78,7 +91,7 @@ our %vi_commands = (
 	'q' => 'quit',
 );
 
-sub default {
+sub self_insert {
 	my ($self, $key) = @_;
 
 	if (length($key) > 1) { # no vague chars
@@ -123,7 +136,9 @@ sub default {
 
 # Subs get args ($self, $key, $count)
 
-sub ctrl_d { $_[0]->bell }
+sub vi_reset { $_[0]{vi_command} = ''; return 0 }
+
+sub sigtstp { kill 20, $$ } # SIGTSTP
 
 =item escape
 
@@ -135,22 +150,10 @@ Reset the command mode.
 
 Return the current edit line to the application for execution.
 
-=cut
-
-sub escape { $_[0]{vi_command} = ''; return 0 }
-
-sub return { $_[0]{_loop} = 0 }
-
-sub backspace { $_[0]->left }
-
 =item ^Z
 
 Send a SIGSTOP to the process of the application. Might not work when the application
 ignores those, which is something shells tend to do.
-
-=cut
-
-sub ctrl_z { kill 20, $$ } # SIGSTSTP
 
 =item i
 
@@ -176,7 +179,7 @@ sub vi_I {
 }
 
 sub vi_A {
-	($_[1] eq 'A') ? $_[0]->end : $_[0]->right ;
+	($_[1] eq 'A') ? $_[0]->end_of_line : $_[0]->forward_char ;
 	$_[0]->switch_mode();
 }
 
@@ -193,8 +196,11 @@ Switch to multiline insert mode at the end of the edit buffer.
 =cut
 
 sub vi_M {
-	if ($_[1] eq 'M') { $_[0]{pos}[1] = $#{$_[0]{lines}}; $_[0]->end; }
-	else { $_[0]->right }
+	if ($_[1] eq 'M') {
+		$_[0]{pos}[1] = $#{$_[0]{lines}};
+		$_[0]->end_of_line;
+	}
+	else { $_[0]->forward_char }
 	$_[0]->switch_mode('multiline')
 }
 
@@ -221,7 +227,7 @@ __END__
 sub _get_chr { # get extra argument
 	my $self = shift;
 	my $chr =  $self->key_name( $self->read_key );
-	return $self->escape if $chr eq 'escape';
+	return $self->vi_reset if $chr eq 'escape';
 	return undef if length $chr > 1;
 	#print STDERR "got argument chr: $chr\n";
 	$$self{vi_command} .= $chr;
@@ -231,7 +237,7 @@ sub _get_chr { # get extra argument
 sub _do_motion { # get and do a motion
 	my ($self, $ignore, $cnt) = @_;
 	my $key =  $self->key_name( $self->read_key );
-	return $self->escape if $key eq 'escape';
+	return $self->vi_reset if $key eq 'escape';
 	return $self->bell
 		unless grep {$_ eq $key} @vi_motions, $ignore, qw/left right up down home end/;
 	my $vi_cmd = $$self{vi_command};
@@ -242,6 +248,9 @@ sub _do_motion { # get and do a motion
 		$$self{vi_command} = (grep {$_ eq $key} qw/0 ^ $/) ? '' : $cnt ;
 		$re = $self->do_key($key, $cnt);
 		$$self{pos} = $pos unless $re; # reset pos if unsuccessfull
+		$$self{pos}[0]++  if lc($key) eq 'e'
+			and $$self{pos}[0] < length $$self{lines}[ $$self{pos}[1] ];
+			# always one exception :S
 	}
 	$$self{vi_command} = $vi_cmd . $key;
 	return $re;
@@ -252,12 +261,12 @@ sub _do_motion { # get and do a motion
 Makes current edit line a comment that will be listed in the history,
 but won't be executed.
 
-Only works if the 'ignore_comment' option is set.
+Only works if the 'comment_begin' option is set.
 
 =cut
 
 sub vi_comment {
-	$_[0]{lines}[ $_[0]{pos}[1] ] = $_[0]{config}{ignore_comment}
+	$_[0]{lines}[ $_[0]{pos}[1] ] = $_[0]{config}{comment_begin}
 		. ' ' . $_[0]{lines}[ $_[0]{pos}[1] ];
 	$_[0]{poss}[0] += 2 unless $_[0]{poss}[1];
 }
@@ -280,7 +289,7 @@ Do pathname completion but inserts B<all> matches.
 sub vi_complete {
 	my ($self, $key) = @_;
 
-	return $self->tab(undef, 'PREVIEW') if $key eq '='; # TODO use globs
+	return $self->possible_completions() if $key eq '=';
 
 	my $buffer = join "\n", @{$$self{lines}};
 	my $begin = substr $buffer, 0, $self->pos2off($$self{pos}), '';
@@ -360,7 +369,7 @@ sub vi_repeat {
 	die "BUG: we ain't gonna loop all day !" if $2 eq '.';
 	$$self{vi_command} = defined $cnt ? $cnt : $1 || '';
 	$self->unread_key($3);
-	$self->default($2);
+	$self->self_insert($2);
 }
 
 =item v
@@ -412,7 +421,10 @@ sub vi_W { # no error, just end of line
 	my $l = $$self{lines}[ $$self{pos}[1] ];
 	for (1..$cnt) {
 		if ($l =~ /^.{$$self{pos}[0]}(.+?)(?<!$w)$w/) { $$self{pos}[0] += length $1 }
-		else { $self->end; last; }
+		else {
+			$self->end_of_line;
+			last;
+		}
 	}
 	return 1;
 }
@@ -430,8 +442,11 @@ sub vi_E { # no error, just end of line
 	my $w = ($key eq 'E') ? '\\S' : '\\w';
 	my $l = $$self{lines}[ $$self{pos}[1] ];
 	for (1..$cnt) {
-		if ($l =~ /^.{$$self{pos}[0]}(.*?$w+)/) { $$self{pos}[0] += length $1 }
-		else { $self->end; last; }
+		if ($l =~ /^.{$$self{pos}[0]}($w?.*?$w+)/) { $$self{pos}[0] += length($1) - 1 }
+		else {
+			$self->end_of_line;
+			last;
+		}
 	}
 	return 1;
 }
@@ -451,7 +466,10 @@ sub vi_B { # no error, just begin of line
 	for (1..$cnt) {
 		$l = substr($l, 0, $$self{pos}[0]);
 		if ($l =~ /($w+[^$w]*)$/) { $$self{pos}[0] -= length $1 }
-		else { $self->home; last; }
+		else {
+			$self->beginning_of_line;
+			last;
+		}
 	}
 	return 1;
 }
@@ -567,7 +585,7 @@ Delete from cursor to end of line and enter insert mode.
 sub vi_C { # like vi_D but without killbuf and with insert mode
 	my ($self, $key, $cnt) = @_;
 	my $pos = [ @{$$self{pos}} ]; # force copy
-	if ($key eq 'C') { $self->end }
+	if ($key eq 'C') { $self->end_of_line }
 	else { return unless $self->_do_motion('c', $cnt) }
 	if ($$self{vi_command} =~ /cc$/) { splice(@{$$self{lines}}, $$self{pos}[1], 1) }
 	else { $self->substring('', $pos, $$self{pos}) }
@@ -662,7 +680,7 @@ part in the save buffer.
 sub vi_D {
 	my ($self, $key, $cnt) = @_;
 	my $pos = [ @{$$self{pos}} ]; # force copy
-	if ($key eq 'D') { $self->end }
+	if ($key eq 'D') { $self->end_of_line }
 	else { return unless $self->_do_motion('d', $cnt) }
 	if ($$self{vi_command} =~ /dd$/) {
 		$$self{killbuf} = splice(@{$$self{lines}}, $$self{pos}[1], 1)."\n";
@@ -686,7 +704,7 @@ Like y but from cursor till end of line.
 sub vi_Y { # like vi_D but only copies, doesn't delete
 	my ($self, $key, $cnt) = @_;
 	my $pos = [ @{$$self{pos}} ]; # force copy
-	if ($key eq 'Y') { $self->end }
+	if ($key eq 'Y') { $self->end_of_line }
 	else { return unless $self->_do_motion('y', $cnt) }
 	if ($$self{vi_command} =~ /yy$/) {
 		$$self{killbuf} = $$self{lines}[ $$self{pos}[1] ]."\n";
@@ -708,7 +726,7 @@ Insert I<count> copies of the the save buffer before the cursor.
 sub vi_P {
 	my ($self, $key, $cnt) = @_;
 	return unless length $$self{killbuf};
-	$self->right if $key eq 'p';
+	$self->forward_char if $key eq 'p';
 	$self->substring($$self{killbuf} x $cnt);
 }
 
@@ -739,8 +757,8 @@ Go I<count> lines backward in history.
 =cut
 
 sub vi_K {
-	$_[0]->hist_up || last for 1 .. $_[2];
-	$_[0]->home;
+	$_[0]->previous_history || last for 1 .. $_[2];
+	$_[0]->beginning_of_line;
 }
 
 =item [I<count>] j
@@ -752,8 +770,8 @@ Go I<count> lines forward in history.
 =cut
 
 sub vi_J {
-	$_[0]->hist_down || last for 1 .. $_[2];
-	$_[0]->home;
+	$_[0]->next_history || last for 1 .. $_[2];
+	$_[0]->beginning_of_line;
 }
 
 =item [I<number>] G
@@ -764,7 +782,7 @@ Go to history entry number I<number>, or to the first history entry.
 
 sub vi_G {
 	return $_[0]->bell if $_[2] > @{$_[0]{history}};
-	$_[0]->set_hist( @{$_[0]{history}} - $_[2] );
+	$_[0]->set_history( @{$_[0]{history}} - $_[2] );
 	# we keep the history in the reversed direction
 }
 
@@ -810,7 +828,7 @@ sub vi_N { # last_search = [ dir, string, hist_p ]
 	#print STDERR "succes: $succes at: $hist_p\n";
 
 	if ($succes) {
-		$self->set_hist($hist_p);
+		$self->set_history($hist_p);
 		$$self{last_search}[2] = $hist_p;
 		return 1;
 	}
@@ -832,7 +850,7 @@ The execution of this buffer happens entirely without returning to the applicati
 sub vi_mini_buffer { 
 	my ($self, $key) = @_;
 
-	$self->switch_mode();
+	$self->switch_mode('insert');
 	my $save = $self->save();
 	@$self{qw/_vi_mini_b prompt lines pos/} = (1, $key, [''], [0,0]);
 	$self->loop();
@@ -912,10 +930,10 @@ FIXME bit buggy
 
 =cut
 
-sub ctrl_a {
+sub vi_increment {
 	my ($self, $key) = @_;
 	my ($l, $x) = ( $$self{lines}[ $$self{pos}[1] ], $$self{pos}[0] );
-	my $add = ($key eq 'ctrl_a') ? 1 : -1;
+	my $add = ($key eq 'ctrl_A') ? 1 : -1;
 
 	return $self->bell unless $l =~ /^(.{0,$x}?)(0x(?i:[a-f\d])+|\d+)(.*?)$/; # FIXME triple check this regexp
 	my ($pre, $int, $post) = ($1, $2, $3);
@@ -924,8 +942,6 @@ sub ctrl_a {
 
 	$$self{lines}[ $$self{pos}[1] ] = $pre . $int . $post;
 }
-
-sub ctrl_x { shift->ctrl_a(@_) }
 
 # ######## #
 # Commands #
@@ -1007,7 +1023,8 @@ Map a char (or char sequence) to a key name.
 
 sub bindchr {
 	my $self = shift;
-	$self->SUPER::bindchr(split /=/, $_[0]);
+	my @args = (@_ == 1) ? (split /=/, $_[0]) : (@_);
+	$self->SUPER::bindchr(@args);
 }
 
 =item B<bindkey> I<chr>=sub { I<code> }
@@ -1018,8 +1035,11 @@ Map a char (or char sequence) to a key name.
 
 sub bindkey {
 	my $self = shift;
+	$self->SUPER::bindkey(@_) if @_ == 2;
 	my @arg = split /=/, $_[0], 2;
-	$self->SUPER::bindkey($arg[0], eval $arg[1]);
+	$arg[1] = eval $arg[1];
+	return warn $@."\n\n" if $@;
+	$self->SUPER::bindkey(@arg);
 }
 
 
@@ -1122,7 +1142,7 @@ define your own shell subroutine (see below).
 =item editor
 
 Editor command used for the 'v' binding. The string is run by the L<shell> command.
-This option defaults to "vi %".
+This option defaults to the EDITOR enviroment variable or to "vi %".
 
 =item shell
 

@@ -8,12 +8,13 @@ BEGIN {
 }
 
 my $t;
-$t = Term::ReadLine::Zoid::ViCommand->new('test');
+$t = Term::ReadLine::Zoid->new('test');
 $t->{config}{bell} = sub {}; # Else the "\cG" fucks up test harness
 
 # test routines
 sub test_reset {
 	$_[0]->reset();
+	$_[0]->switch_mode('command');
 	$_[0]->{lines} = [ 'duss ja', 'nou ja', 'test 123' ]; # 3 X 7,6,8
 	$_[0]->{pos} = [5, 1];
 }
@@ -28,14 +29,14 @@ ok $t->{vi_command} eq '', 'escape reset';
 test_reset $t;
 $t->press('4h');
 is_deeply $t->{pos}, [1,1], 'h 1';
-ok $t->default('h'), 'h 2';
+ok $t->self_insert('h'), 'h 2';
 $t->{pos} = [0,0];
-ok !$t->default('h'), 'h 3';
+ok !$t->self_insert('h'), 'h 3';
 $t->press('7 ');
 is_deeply $t->{pos}, [7,0], 'space';
-ok $t->default('l'), 'l 1';
+ok $t->self_insert('l'), 'l 1';
 $t->{pos} = [8,2];
-ok !$t->default('l'), 'l 2';
+ok !$t->self_insert('l'), 'l 2';
 
 # control-z
 
@@ -143,11 +144,14 @@ my $lines = join '', @{$$t{lines}};
 #$t->press('fs'); # for repeat movements
 for my $k (@Term::ReadLine::Zoid::ViCommand::vi_motions, 'd') {
 	test_reset $t;
+#	print STDERR "# pos: $$t{pos}[0],$$t{pos}[1] lines: ".join( "\n", @{$$t{lines}})."\n";
 	my $p = 'd'.$k;
 	next if grep {$_ eq $k} qw/f F t T ;/, ',';
 #	$p .= 's' if grep {$_ eq $k} qw/f F t T/;
 	$p = '1'.$p if $k eq '|';
+#	print STDERR "# pressing $p\n";
 	$t->press($p);
+#	print STDERR "# pos: $$t{pos}[0],$$t{pos}[1] lines: ".join( "\n", @{$$t{lines}})."\n";
 	ok length( join( '', @{$$t{lines}}) ) < length $lines, $p;
 }
 

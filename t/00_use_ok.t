@@ -4,8 +4,8 @@ require Test::More;
 	Term::ReadLine::Zoid::Base
 	Term::ReadLine::Zoid
 	Term::ReadLine::Zoid::ISearch
-	Term::ReadLine::Zoid::MultiLine
 	Term::ReadLine::Zoid::ViCommand
+	Term::ReadLine::Zoid::FileBrowse
 /;
 
 Test::More->import(tests => scalar @modules);

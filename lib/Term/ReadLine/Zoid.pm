@@ -3,12 +3,13 @@ package Term::ReadLine::Zoid;
 use strict;
 use vars '$AUTOLOAD';
 use Term::ReadLine::Zoid::Base;
+#use encoding 'utf8';
 no warnings; # undef == '' down here
 
-our @ISA = qw/Term::ReadLine::Zoid::Base Term::ReadLine::Stub/; # explicitly not using T:RL::Stub
-our $VERSION = '0.04';
+our @ISA = qw/Term::ReadLine::Zoid::Base Term::ReadLine::Stub/; # explicitly not use'ing T:RL::Stub
+our $VERSION = '0.05';
 
-sub import { # terrible hack - Term::ReadLine 5.6.x is defective
+sub import { # terrible hack - Term::ReadLine in perl 5.6.x is defective
 	return unless (caller())[0] eq 'Term::ReadLine' and $] < 5.008 ;
 	*Term::ReadLine::Stub::new = sub {
 		shift;
@@ -22,49 +23,80 @@ sub new {
 	return $self->_init(@_);
 }
 
-our $_current = undef;
+our $_current;
+our %_config  = (
+	minline		=> 0,
+	autohistory	=> 1,
+	autoenv		=> 1,
+	autolist	=> 1,
+	automultiline	=> 1,
+	PS2		=> '> ',
+	comment_begin	=> '#',
+	maxcomplete	=> 'pager',
+	default_mode	=> 'insert',
+);
+our %_keymaps = (
+	insert => {
+		return	=> 'accept_line',
+		ctrl_D	=> 'delete_char_or_eof',
+		ctrl_C	=> 'return_empty_string',
+		escape	=> 'switch_mode_command',
+		ctrl_R	=> 'switch_mode_isearch',
+		ctrl__	=> 'switch_mode_fbrowse',
+		right	=> 'forward_char',
+		ctrl_F	=> 'forward_char',
+		left	=> 'backward_char',
+		ctrl_B	=> 'backward_char',
+		home	=> 'beginning_of_line',
+		ctrl_A	=> 'beginning_of_line',
+		end	=> 'end_of_line',
+		ctrl_E	=> 'end_of_line',
+		up	=> 'previous_history',
+		page_up	=> 'previous_history',
+		ctrl_P	=> 'previous_history',
+		down	=> 'next_history',
+		page_down => 'next_history',
+		ctrl_N	=> 'next_history',
+		delete	=> 'delete_char',
+		backspace => 'backward_delete_char',
+		ctrl_U	=> 'unix_line_discard',
+		ctrl_K	=> 'kill_line',
+		ctrl_W	=> 'unix_word_rubout',
+		tab	=> 'complete',
+		ctrl_V	=> 'quoted_insert',
+		insert	=> 'overwrite_mode',
+		ctrl_L	=> 'clear_screen',
+		_default => 'self_insert',
+	},
+	multiline => {
+		return	=> 'insert_line',
+		up	=> 'backward_line',
+		down	=> 'forward_line',
+		page_up => 'page_up',
+		page_down => 'page_down',
+		_isa	=> 'insert',
+	},
+	command => { _use => 'Term::ReadLine::Zoid::ViCommand'  },
+	isearch => { _use => 'Term::ReadLine::Zoid::ISearch'    },
+	fbrowse => { _use => 'Term::ReadLine::Zoid::FileBrowse' },
+);
 
 sub _init {
 	my ($self, $name, $in, $out) = @_;
 
 	%$self = (
 		appname   => $name,
-		IN        => $in || *STDIN{IO},
+		IN        => $in  || *STDIN{IO},
 		OUT       => $out || *STDOUT{IO},
 		history   => [],
 		hist_cnt  => 1,
-		default_mode => __PACKAGE__,
+		class     => ref($self), # we might be overloaded
 		undostack => [],
-		key_map   => {},
 	%$self );
-	$$self{config}{$$_[0]} ||= $$_[1] for
-			[ minline        => 0    ],
-			[ autohistory    => 1    ],
-			[ autoenv        => 1    ],
-			[ autolist       => 1    ],
-			[ automultiline  => 1    ],
-			[ PS2            => '> ' ],
-			[ maxcomplete    => 150  ],
-			[ ignore_comment => '#'  ];
-	$$self{key_map}{command}{_on_switch} = sub {
-		return $$self{_loop} = undef if $$self{_vi_mini_b};
-		$$self{vi_command}   = '';
-		$$self{vi_history} ||= [];
-		$self->left unless $_[1] or $$self{pos}[0] == 0;
-		return 'Term::ReadLine::Zoid::ViCommand';
-	};
-	$$self{key_map}{isearch}{_on_switch} = sub {
-		$$self{is_lock} = undef;
-		$$self{is_save} = [[''], [0,0], undef];
-		return 'Term::ReadLine::Zoid::ISearch';
-	};
-	$$self{key_map}{multiline}{_on_switch} =
-		sub { return 'Term::ReadLine::Zoid::MultiLine' };
-	$$self{_key_map} = $$self{key_map}; # local backup
 
-#	my $chr_map = $self->{chr_map} || {};
-#	$$self{chr_map} = $default_chr_map;
-#	$self->bind_chr($_, $$chr_map{$_}) for keys %$chr_map;
+	$$self{config}{$_}  ||= $_config{$_}  for keys %_config ;
+	$$self{keymaps}{$_} ||= $_keymaps{$_} for keys %_keymaps;
+	eval "sub switch_mode_$_;" for keys %{$$self{keymaps}}; # if we declare, we can()
 
 	# rcfiles
 	my ($rcfile) = grep {-e $_ && -r _} 
@@ -76,6 +108,18 @@ sub _init {
 		do $rcfile;
 	}
 
+	# PERL_RL
+	if (exists $ENV{PERL_RL}) {
+		my ($which, @config) = split /\s+/, $ENV{PERL_RL};
+		if (UNIVERSAL::isa($self, "Term::ReadLine::$which")) {
+			for (@config) {
+				/(\w+)=(.*)/ or next;
+				$$self{config}{$1} = $2;
+			}
+		}
+	}
+
+	$self->switch_mode();
 	return $self;
 }
 
@@ -83,8 +127,17 @@ sub AUTOLOAD {
 	$AUTOLOAD =~ s/.*:://;
 	return if $AUTOLOAD eq 'DESTROY';
 	my $self = shift;
-	my $sub = $$self{default_mode}.'::'.$AUTOLOAD;
-	$self->$sub(@_);
+	if ($AUTOLOAD =~ /^switch_mode_(.*)/) {
+		$self->switch_mode($1, @_);
+	}
+	elsif ($$self{class} ne __PACKAGE__) {
+		my $sub = $$self{class}.'::'.$AUTOLOAD;
+		$self->$sub(@_);
+	}
+	else {
+		my (undef, $f, $l) = caller;
+		die "$AUTOLOAD: no such method at $f line $l\n"
+	}
 }
 
 # ############ #
@@ -108,13 +161,13 @@ sub readline {
 
 sub _return { # also used by continue
 	my $self = shift;
-	bless $self, $$self{default_mode}; # rebless default class
+	bless $self, $$self{class}; # rebless default class
 	print { $$self{OUT} } "\n";
 	return undef unless defined $$self{_loop}; # exit application
 	my $string = join("\n", @{$$self{lines}}) || '';
 	$self->AddHistory($string) if $$self{config}{autohistory};
-	return '' if $$self{config}{ignore_comment}
-		and ! grep {$_ !~ /^\s*\Q$$self{config}{ignore_comment}\E/} @{$$self{lines}};
+	return '' if $$self{config}{comment_begin}
+		and ! grep {$_ !~ /^\s*\Q$$self{config}{comment_begin}\E/} @{$$self{lines}};
 	$string =~ s/\\\n//ge if $$self{config}{automultiline};
 	#print STDERR "string: $string\n";
 	return $string;
@@ -161,7 +214,9 @@ sub GetHistory {
 
 sub SetHistory {
 	my $self = shift;
-	$self->{history} = ref($_[0]) ? $_[0] : [@_];
+	$self->{history} = ref($_[0])
+		? [ reverse @{$_[0]} ]
+		: [ reverse @_       ] ;
 }
 
 # TermSize in Base
@@ -170,10 +225,8 @@ sub continue { # user typed \n but app says we ain't done
 	my $self = shift;
 	shift @{$$self{history}} if $$self{history}[0] eq join "\n", @{$$self{lines}};
 	$$self{_buffer}++; # previous _return printed a \n
-	my $mode = $$self{mode};
-	$self->switch_mode('multiline');
-	$self->do_key("\n");
-	$self->switch_mode($mode);
+	$self->switch_mode( $$self{mode} ); # switch into last mode
+	$self->insert_line();
 	$self->loop();
 	return $self->_return();
 }
@@ -181,101 +234,16 @@ sub continue { # user typed \n but app says we ain't done
 sub current {
 	return $_current if $_current;
 	my (undef, $f, $l) = caller;
-	die "No current Ter::ReadLine::Zoid object at $f line $l";
+	die "No current Term::ReadLine::Zoid object at $f line $l";
 }
 
 sub bindkey {
-	my ($self, $key, $sub, $map) = @_;
-	$map ||= 'default';
-	if ($map eq 'default') { $$self{_key_map}{$key} = $sub }
-	else { $$self{_key_map}{$map}{$key} = $sub }
-}
-
-# ############ #
-# Internal api #
-# ############ #
-
-sub switch_mode {
-	my ($self, $mode, @args) = @_;
-	$mode ||= 'default';
-	if ($mode eq 'default') {
-		$$self{key_map} = $$self{_key_map};
-		$$self{replace} = 0;
-		bless $self, $$self{default_mode};
-	}
-	else {
-		return warn "No such mode: $mode\n"
-			unless exists $$self{_key_map}{$mode};
-		$$self{key_map} = $$self{_key_map}{$mode};
-		if (exists $$self{key_map}{_on_switch}) {
-			my $class = $$self{key_map}{_on_switch}->(@args);
-			return unless $class =~ /\w/;
-			eval "use $class";
-			die $@ if $@;
-			bless $self, $class;
-		}
-	}
-	$$self{mode} = $mode;
-}
-
-sub reset { # should this go in Base ?
-	my $self = shift;
-	$$self{lines} = [''];
-	$$self{pos}  = [0, 0];
-	$$self{_buffer} = 0;
-	$$self{replace} = 0;
-	$$self{hist_p} = undef;
-	$$self{undostack} = [];
-}
-
-sub save {
-	my $self = shift;
-	my %save = (
-		pos    => [ @{$$self{pos}}   ],
-		lines  => [ @{$$self{lines}} ],
-		prompt => $$self{prompt},
-	);
-	return \%save;
-}
-
-sub restore {
-	my ($self, $save) = @_;
-	$$self{pos}    = [ @{$$save{pos}} ];
-	$$self{lines}  = [ @{$$save{lines}} ];
-	$$self{prompt} = $$save{prompt};
-}
-
-sub hist_up {
-	my $self = shift;
-	if (not defined $$self{hist_p}) {
-		return $self->bell unless scalar @{$$self{history}};
-		$$self{_hist_save} = $self->save();
-		$self->set_hist(0);
-	}
-	elsif ($$self{hist_p} < $#{$$self{history}}) {
-		$self->set_hist( ++$$self{hist_p} );
-	}
-	else { return $self->bell }
-	return 1;
-}
-
-sub hist_down {
-	my $self = shift;
-	return $self->bell unless defined $$self{hist_p};
-	if ($$self{hist_p} == 0) {
-		$$self{hist_p} = undef;
-		$self->restore($$self{_hist_save});
-	}
-	else { $self->set_hist( --$$self{hist_p} ) }
-	return 1;
-}
-
-sub set_hist { # make sure the index u ask for exists !
-	my $self = shift;
-	$$self{hist_p} = shift;
-	$$self{lines} = [ split /\n/, $$self{history}[ $$self{hist_p} ] ];
-	$$self{pos} = [ length($$self{lines}[-1]), $#{$$self{lines}} ];
-	# posix says {pos} should be [0, 0], i disagree
+	my ($self, $key, $sub, $mode) = @_;
+	$mode ||= $$self{config}{default_mode};
+	$$self{keymaps}{$mode} ||= {};
+	$key = 'ctrl_'.uc($2) if $key =~ /^(\^|[cC]-)(.)$/; # translate notation
+	$sub =~ tr/-/_/ unless ref $sub;
+	$$self{keymaps}{$mode}{$key} = $sub;
 }
 
 # ######### #
@@ -308,53 +276,198 @@ sub draw {
 		}ge;
 	}
 
-	# render prompt - ugly "set nu" code by carl0s
+	# format PS1
 	my $prompt = ref($$self{prompt}) ? ${$$self{prompt}} : $$self{prompt};
-	my $ps2len = length(@lines) + 2; # reserved space for line numbers
-	$prompt =~ s/(!!|!)/($1 eq '!!') ? '!' : $$self{hist_cnt}/eg;
-	my @prompt = split /\n/, $prompt;
-	@prompt = ('') unless @prompt;
-	my $ps2 = ref($$self{config}{PS2}) ? ${$$self{config}{PS2}} : $$self{config}{PS2};
-	$pos[0] += !$pos[1] ? $self->print_length($prompt[-1]) 
-		: ( $self->print_length($ps2)  + ( $self->{config}{nu} ? $ps2len : 0 ) );
-	$pos[1] += $#prompt;
-	$lines[$_] =  (($self->{config}{nu} && $_) ? sprintf("\e[%dm% ${ps2len}d\e[0m ",33, $_ + 1) : '').$ps2.$lines[$_] for 1 .. $#lines;
-	$lines[0] = pop(@prompt) . $lines[0];
-	unshift @lines, @prompt if @prompt;
+	$prompt =~ s/(!!)|!/$1?'!':$$self{hist_cnt}/eg;
 
-	# right prompt ... idea from zsh
-	my $l = $self->print_length($lines[0]);
-	my $rprompt = ref($$self{config}{RPS1}) ? ${$$self{config}{RPS1}} : $$self{config}{RPS1};
-	if ($rprompt and $l < $$self{term_size}[0]) {
-		$rprompt = substr $rprompt, - $$self{term_size}[0] + $l -1;
-		$lines[0] .= (' 'x($$self{term_size}[0] - $l - $self->print_length($rprompt) -1)) . $rprompt;
+	# format PS2 ... thank carl0s if you like to set nu
+	my $len = length scalar @lines;
+	my $nu_form = (defined $ENV{CLICOLOR} and ! $ENV{CLICOLOR})
+		? "  %${len}u " : "  \e[33m%${len}u\e[0m " ;
+	if (@lines > 1) {
+		my $ps2 = ref($$self{config}{PS2}) ? ${$$self{config}{PS2}} : $$self{config}{PS2};
+		if ($$self{config}{nu}) { # line numbering
+			$lines[$_] = sprintf($nu_form, $_ + 1) . $ps2 . $lines[$_]
+				for 1 .. $#lines;
+			$pos[0] += $self->print_length($ps2) + $len + 3 if $pos[1];
+		}
+		else {
+			$lines[$_] = $ps2 . $lines[$_] for 1 .. $#lines;
+			$pos[0] += $self->print_length($ps2) if $pos[1];
+		}
+	}
+
+	# include PS1
+	my @prompt = split /\n/, $prompt, -1;
+	if (@prompt) {
+		$prompt[-1] = sprintf($nu_form, 1) . $prompt[-1] if $$self{config}{nu};
+		$pos[0] += $self->print_length($prompt[-1]) unless $pos[1];
+		$pos[1] += $#prompt;
+		$lines[0] = pop(@prompt) . $lines[0];
+		unshift @lines, @prompt if @prompt;
+	}
+
+	# format RPS1
+	if (my $rprompt = $$self{config}{RPS1}) {
+		$rprompt = $$rprompt if ref $rprompt;
+		my $l = $self->print_length($lines[0]);
+		if ($rprompt and $l < $$self{term_size}[0]) {
+			$rprompt = substr $rprompt, - $$self{term_size}[0] + $l - 1;
+			my $w = $$self{term_size}[0] - $l - $self->print_length($rprompt) - 1;
+			$lines[0] .= (' 'x$w) . $rprompt;
+		}
 	}
 
 	$self->print(\@lines, \@pos);
 }
 
-# #################### #
-# Default key bindings #
-# #################### #
+# ############ #
+# Internal api #
+# ############ #
 
-sub escape { $_[0]->switch_mode('command') }
+sub switch_mode { 
+	my ($self, $mode, @args) = @_;
+	$mode ||= $$self{config}{default_mode};
+	unless ($$self{keymaps}{$mode}) {
+		warn "$mode: no such keymap\n\n";
+		$mode = 'insert'; # hardcoded fallback
+	}
+	$$self{mode} = $mode;
+	if (my $class = delete $$self{keymaps}{$mode}{_use}) { # bootstrap
+		eval "use $class";
+		if ($@) {
+			$$self{keymaps}{$mode}{_use} = $class; # put it back
+			die $@;
+		}
+		bless $self, $class;
+		$$self{keymaps}{$mode} = {
+			%{ $$self{keymaps}{$mode} },
+			%{ $self->keymap($mode)    }
+		} if UNIVERSAL::can($class, 'keymap');
+		$$self{keymaps}{$mode}{_class} ||= $class;
+	}
+	else {
+		my $class = $$self{keymaps}{$mode}{_class} || $$self{class};
+		#print STDERR "class: $class\n";
+		bless $self, $class;
+	}
 
-sub ctrl_r { $_[0]->switch_mode('isearch') }
+	if (exists $$self{keymaps}{$mode}{_on_switch}) {
+		my $sub = $$self{keymaps}{$mode}{_on_switch};
+		return ref($sub) ? $sub->($self, @args) : $self->$sub(@args) ;
+	}
+}
 
-sub default {
+sub reset { # should this go in Base ?
+	my $self = shift;
+	$$self{lines} = [''];
+	$$self{pos}  = [0, 0];
+	$$self{_buffer} = 0;
+	$$self{replace} = 0;
+	$$self{hist_p} = undef;
+	$$self{undostack} = [];
+	$$self{scroll_pos} = 0;
+}
+
+sub save {
+	my $self = shift;
+	my %save = (
+		pos    => [ @{$$self{pos}}   ],
+		lines  => [ @{$$self{lines}} ],
+		prompt => $$self{prompt},
+	);
+	return \%save;
+}
+
+sub restore {
+	my ($self, $save) = @_;
+	$$self{pos}    = [ @{$$save{pos}} ];
+	$$self{lines}  = [ @{$$save{lines}} ];
+	$$self{prompt} = $$save{prompt};
+}
+
+sub substring { # buffer is undef is copy, end is undef is insert
+	my ($self, $buffer, $start, $end) = @_;
+
+	($start, $end) = sort {$$a[1] <=> $$b[1] or $$a[0] <=> $$b[0]} ($start, $end) if $end;
+	my ($pre, $post) = _split($start || $$self{pos}, [ @{$$self{lines}} ]); # force copy of lines
+	my $re = [''];
+	if ($end) {
+		$$end[0] = $$end[0] - $$start[0] if $$end[1] == $$start[1];
+		$$end[1] = $$end[1] - $$start[1];
+		($re, $post) = _split($end, $post);
+	}
+	return join "\n", @$re unless defined $buffer;
+
+	$buffer = [split /\n/, $buffer, -1] if ! ref $buffer;
+	$buffer = [''] unless @$buffer;
+	$$pre[-1] .= shift @$buffer;
+	push @$pre, @$buffer;
+	$$self{pos} = [ length($$pre[-1]), $#$pre ];
+	$$pre[-1] .= shift @$post;
+	$$self{lines} = [ @$pre, @$post ];
+
+	return join "\n", @$re;
+}
+
+sub _split {
+	my ($pos, $buf, $nbuf) = (@_, []);
+	push @$nbuf, splice @$buf, 0, $$pos[1] if $$pos[1];
+	push @$nbuf, substr($$buf[0], 0, $$pos[0], '') || '';
+	return ($nbuf, $buf);
+}
+
+# ############ #
+# Key routines #
+# ############ #
+
+sub previous_history {
+	my $self = shift;
+	if (not defined $$self{hist_p}) {
+		return $self->bell unless scalar @{$$self{history}};
+		$$self{_hist_save} = $self->save();
+		$self->set_history(0);
+	}
+	elsif ($$self{hist_p} < $#{$$self{history}}) {
+		$self->set_history( ++$$self{hist_p} );
+	}
+	else { return $self->bell }
+	return 1;
+}
+
+sub next_history {
+	my $self = shift;
+	return $self->bell unless defined $$self{hist_p};
+	if ($$self{hist_p} == 0) {
+		$$self{hist_p} = undef;
+		$self->restore($$self{_hist_save});
+	}
+	else { $self->set_history( --$$self{hist_p} ) }
+	return 1;
+}
+
+sub set_history {
+	my $self = shift;
+	my $hist_p = shift;
+	return $self->bell if $hist_p < 0 or $$self{hist_p} > $#{$$self{history}};
+	$$self{hist_p} = $hist_p;
+	$$self{lines} = [ split /\n/, $$self{history}[$hist_p] ];
+	$$self{pos} = [ length($$self{lines}[-1]), $#{$$self{lines}} ];
+	# posix says {pos} should be [0, 0], i disagree
+}
+
+sub self_insert {
 	my ($self, $chr) = (@_);
 
 	# force pos on end of line
 	$$self{pos}[0] = length $$self{lines}[ $$self{pos}[1] ]
 		if $$self{pos}[0] > length $$self{lines}[ $$self{pos}[1] ];
 
-	# FIXME if non printable do something funky
-
 	substr $$self{lines}[ $$self{pos}[1] ], $$self{pos}[0], $$self{replace}, $chr;
 	$$self{pos}[0] += length $chr;
 }
 
-sub return {
+sub accept_line {
 	my $self = shift;
 	if ( 
 		$$self{config}{automultiline} and scalar @{$$self{lines}}
@@ -365,16 +478,19 @@ sub return {
 	}
 	else { $$self{_loop} = 0 }
 }
+*return = \&accept_line;
 
-sub ctrl_d {
-	length( join "\n", @{$_[0]{lines}} ) 
-		? ( $_[0]->bell ) 
+sub return_eof_maybe {
+	length( join "\n", @{$_[0]{lines}} )
+		? ( $_[0]->bell )
 		: ( $_[0]{_loop} = undef ) ;
 }
 
-sub ctrl_c { @{$_[0]}{'lines', '_loop'} = ([], 0) }
+sub return_eof { @{$_[0]}{'lines', '_loop'} = ([], undef) }
 
-sub delete { # 1 char only !
+sub return_empty_string { @{$_[0]}{'lines', '_loop'} = ([], 0) }
+
+sub delete_char {
 	my $self = shift;
 
 	if ($$self{pos}[0] >= length $$self{lines}[ $$self{pos}[1] ]) {
@@ -387,17 +503,31 @@ sub delete { # 1 char only !
 	return 1;
 }
 
-sub backspace {
-	$_[0]->left();
-	$_[0]->delete() unless $_[0]{replace};
+sub delete_char_or_eof {
+	my $self = shift;
+	if (
+		$$self{pos}[1] == $#{$$self{lines}}
+		and ! length $$self{lines}[-1]
+	) { $$self{_loop} = $$self{pos}[1] ? 0 : undef }
+	else { $self->delete_char() }
 }
 
-sub ctrl_u {
+sub backward_delete_char {
+	$_[0]->backward_char();
+	$_[0]->delete_char() unless $_[0]{replace};
+}
+
+sub unix_line_discard {
 	$_[0]{killbuf} = join "\n", @{$_[0]{lines}};
 	@{$_[0]}{'lines', 'pos'} = ([''], [0, 0])
 }
 
-sub tab {
+sub possible_completions {
+	my $self = shift;
+	$self->complete(undef, 'PREVIEW');
+}
+
+sub complete {
 	my ($self, undef, $preview) = @_;
 
 	# check !autolist stuff
@@ -434,23 +564,29 @@ sub tab {
 	if ($compl[0] eq $compl[-1]) { @compl = ($compl[0]) } # 1 item or list with only duplicates
 	else { @compl = $self->longest_match(@compl) } # returns $compl, @compl
 
+	# format completion
 	my $compl = shift @compl;
-	$compl =~ s#\\\\|(?<!\\)($$meta{quoted})#$1?"\\$1":'\\\\'#ge if $$meta{quoted};
 	$compl = $$meta{prefix} . $compl;
+	$compl .= $$meta{postfix} unless @compl;
+	unless ($$meta{quoted}) {
+		if ($$meta{quote}) {
+			if (ref $$meta{quote}) { $compl = $$meta{quote}->($compl) } # should be code ref
+			else { # plain quote
+				$compl =~ s#\\\\|(?<!\\|^)($$meta{quote})#$1?"\\$1":'\\\\'#ge if $$meta{quote};
+				$compl .= $$meta{quote} if !@compl and $compl =~ /\w$/; # arbitrary cruft
+			}
+		}
+		else { $compl =~ s#\\\\|(?<!\\)(\s)#$1?"\\$1":'\\\\'#eg } # escape whitespaces
+		$compl .= ' ' if !@compl and $compl =~ /\w$/; # arbitrary cruft
+	}
+
+	# display completions
 	if (@compl) {
 		if ($$self{config}{autolist} || $preview) {
 			$self->output( @compl );
 			return if $preview;
 		}
 		else { $$self{completions} = \@compl }
-		$compl =~ s#\\\\|(?<!\\)([^\w\-\./~])#$1?"\\$1":'\\\\'#eg
-			unless $$meta{quoted};
-	}
-	else {
-		$compl .= $$meta{postfix};
-		$compl =~ s#\\\\|(?<!\\)([^\w\-\./~])#$1?"\\$1":'\\\\'#eg
-			unless $$meta{quoted};
-		$compl .= $$meta{quoted}.' ' if $compl =~ /\w$/; # arbitrary cruft
 	}
 
 	# update buffer
@@ -467,7 +603,7 @@ sub longest_match { # cut doubles and find longest match
 
 	@compl = sort @compl;
 	my $match = $compl[0];
-	while ($match and $compl[-1] !~ /^\Q$match\E/) { chop $match } # due to sort only one diff
+	while (length $match and $compl[-1] !~ /^\Q$match\E/) { chop $match } # due to sort only one diff
 
 	my $prev = '';
 	return ($match, grep {
@@ -476,13 +612,13 @@ sub longest_match { # cut doubles and find longest match
 	} @compl);
 }
 
-sub insert {
+sub overwrite_mode {
 	my $b = $_[0]{replace};
 	$_[0]->switch_mode(); # for command mode
 	$_[0]{replace} = $b ? 0 : 1;
 }
 
-sub right { # including cnt for vi mode
+sub forward_char { # including cnt for vi mode
 	my ($self, undef, $cnt) = @_;
 	for (1 .. $cnt||1) {
 		if ($$self{pos}[0] >= length $$self{lines}[ $$self{pos}[1] ]) {
@@ -494,7 +630,7 @@ sub right { # including cnt for vi mode
 	return 1;
 }
 
-sub left { # including cnt for vi mode
+sub backward_char { # including cnt for vi mode
 	my ($self, undef, $cnt) = @_;
 #	print STDERR "going $cnt left, pos $$self{pos}[0]\n";
 	for (1 .. $cnt||1) {
@@ -511,27 +647,16 @@ sub left { # including cnt for vi mode
 	return 1;
 }
 
-sub home { $_[0]{pos}[0] = 0; return 1 }
+sub beginning_of_line { $_[0]{pos}[0] = 0; return 1 }
 
-sub end { $_[0]{pos}[0] = length $_[0]{lines}[ $_[0]{pos}[1] ]; return 1 }
+sub end_of_line { $_[0]{pos}[0] = length $_[0]{lines}[ $_[0]{pos}[1] ]; return 1 }
 
-# define various aliases
-*ctrl_b = \&left;
-*ctrl_f = \&right;
-*up     = \&hist_up;
-*ctrl_p = \&hist_up;
-*down   = \&hist_down;
-*ctrl_n = \&hist_down;
-*ctrl_a = \&home;
-*ctrl_e = \&end;
-
-sub ctrl_v {
-	# FIXME set signals to ingnore (?)
+sub quoted_insert {
 	my $self = shift;
-	$self->default($self->read_key);
+	$self->self_insert($self->read_key);
 }
 
-sub ctrl_w {
+sub unix_word_rubout {
 	my $self = shift;
 	$$self{pos}[0] = length $$self{lines}[ $$self{pos}[1] ]
 		if $$self{pos}[0] > length $$self{lines}[ $$self{pos}[1] ];
@@ -541,11 +666,48 @@ sub ctrl_w {
 	$$self{lines}[ $$self{pos}[1] ] = $pre . $$self{lines}[ $$self{pos}[1] ];
 }
 
-sub ctrl_l { $_[0]->cls() }
+sub clear_screen { $_[0]->cls() }
 
-sub ctrl_k {
+sub kill_line {
 	my $self = shift;
 	$$self{lines}[ $$self{pos}[1] ] = substr $$self{lines}[ $$self{pos}[1] ], 0, $$self{pos}[0];
+}
+
+sub insert_line {
+	my $self = shift;
+	my $l = length $$self{lines}[ $$self{pos}[1] ];
+	my $end = substr $$self{lines}[ $$self{pos}[1] ], $$self{pos}[0], $l, '';
+	$$self{pos} = [0, $$self{pos}[1] + 1];
+	splice @{$$self{lines}}, $$self{pos}[1], 0, $end || '';
+}
+
+sub backward_line {
+	my $self = shift;
+	return 0 unless $$self{pos}[1] > 0;
+	$$self{pos}[1]--;
+	return 1;
+}
+
+sub forward_line {
+	my $self = shift;
+	return 0 unless $$self{pos}[1] < $#{$$self{lines}};
+	$$self{pos}[1]++;
+	return 1;
+}
+
+sub page_up {
+	my $self = shift;
+	my (undef, $higth) = $self->TermSize();
+	$$self{pos}[1] -= $higth;
+	$$self{pos}[1] = 0 if $$self{pos}[1] < 0;
+}
+
+
+sub page_down {
+	my $self = shift;
+	my (undef, $higth) = $self->TermSize();
+	$$self{pos}[1] += $higth;
+	$$self{pos}[1] = $#{$$self{lines}} if $$self{pos}[1] > $#{$$self{lines}};
 }
 
 1;
@@ -586,6 +748,9 @@ Historically this code was part of the Zoidberg shell, but this implementation
 is complete independent from zoid and uses the  L<Term::ReadLine> interface, so it
 can be used with other perl programs.
 
+( The documentation sometimes referes to 'the application', this is the program
+using the ReadLine module for input. )
+
 =head1 ENVIRONMENT
 
 The L<Term::ReadLine> interface module uses the C<PERL_RL> variable
@@ -596,32 +761,37 @@ your perl applications, try something like:
 
 =head1 KEY MAPPING
 
+The function name is given between parenthesis, these can be used for
+privat key maps.
+
+=head2 Default keymap
+
 The default key mapping is as follows:
 
 =over 4
 
-=item escape
-
-=item ^[
+=item escape, ^[  (I<switch_mode_command>)
 
 Place the line editor in command mode, see L<Term::ReadLine::Zoid::ViCommand>.
 
-=item ^C
+=item ^C  (I<return_empty_string>)
 
 End editing and return an empty string.
 
-=item ^D
+=item ^D  (I<delete_char_or_eof>)
 
-End editing and return C<undef>.
-Disabled when there are any chars on the edit line.
+For a single line buffer ends editing and returns C<undef>
+if the line is empty, else it deletes a char.
+For a multiline buffer, ends editing and returns the lines
+to the application if the cursor is on the last line and this line
+is empty, else it deletes a char.
 
-=item delete
+Note that the I<delete_char_or_eof> function does what I<delete_char>
+should do to be compatible with GNU readline lib.
 
-=item backspace
+=item delete  (I<delete_char>)
 
-=item ^H
-
-=item ^?
+=item backspace, ^H, ^?  (I<backward_delete_char>)
 
 Delete and backspace kill the current or previous character.
 The key '^?' is by default considered a backspace because most modern
@@ -629,18 +799,19 @@ keyboards use this key for the "backspace" key and an escape sequence
 for the "delete" key.
 Of course '^H' is also considered a backspace.
 
-=item tab
-
-=item ^I
+=item tab, ^I  (I<complete>)
 
 Try to complete the bigword on left of the cursor.
 
 There is no default completion included in this package, so unless you define a custom
-expansion it doesn't do anything. See the L<completion_function> option.
+expansion it doesn't do anything. See the L</completion_function> option.
 
-=item return
+Uses the PAGER environment variable to find a suitable pager when there are
+more completions to be shown then would fit on the screen.
 
-=item ^J
+See also the L</autolist> and L</maxcomplete> options.
+
+=item return, ^J  (I<accept_line>)
 
 End editing and return the edit line to the application unless the newline is escaped.
 
@@ -654,82 +825,125 @@ option.
 To enter the real multiline editing mode, press 'escape m',
 see L<Term::ReadLine::Zoid::MultiLine>.
 
-=item ^K
+=item ^K  (I<kill_line>)
 
 Delete from cursor to the end of the line.
 
-=item ^L
+=item ^L  (I<clear_screen>)
 
-Clear entire screen.
+Clear entire screen. In contrast with other readline libraries, the prompt
+will remain at the bottom of the screen.
 
-=item ^R
+=item ^R  (I<switch_mode_isearch>)
 
 Enter incremental search mode, see L<Term::ReadLine::Zoid::ISearch>.
 
-=item ^U
+=item ^U  (I<unix_line_discard>)
 
 This is also known as the "kill" char. It deletes all characters on the edit line
 and puts them in the save buffer. You can paste them back in later with 'escape-p'.
 
-=item ^V
+=item ^V  (I<quoted_insert>)
 
 Insert next key literally, ignoring any key-bindings.
 
 WARNING: control or escape chars in the editline can cause unexpected results
 
-=item ^W
+=item ^W  (I<unix_word_rubout>)
 
 Delete the word before the cursor.
 
-=item insert
+=item insert  (I<overwrite_mode>)
 
 Toggle replace bit.
 
-=item ^A
-
-=item home
+=item home, ^A  (I<beginning_of_line>)
 
 Move cursor to the begin of the edit line.
 
-=item ^E
-
-=item end
+=item end, ^E  (I<end_of_line>)
 
 Move cursor to the end of the edit line.
 
-=item ^B
+=item left, ^B  (I<backward_char>)
 
-=item left
-
-=item ^F
-
-=item right
+=item right, ^F  (I<forward_char>)
 
 These keys can be used to move the cursor in the edit line.
 
-=item ^P
+=item up, page_up, ^P  (I<previous_history>)
 
-=item up
-
-=item ^N
-
-=item down
+=item down, page_down, ^N  (I<next_history>)
 
 These keys are used to rotate the history.
 
 =back
 
+=head2 Multi-line keymap
+
+The following keys are different in mutline mode, the others
+fall back to the default behaviour.
+
+=over 4
+
+=item return (I<insert_line>)
+
+Insert a newline at the current cursor position.
+
+=item up (I<backward_line>)
+
+Move the cursor one line up.
+
+=item down (I<forward_line>)
+
+Move the cursor one line down.
+
+=item page_up (I<page_up>)
+
+Move the cursor one screen down, or to the bottom of the buffer.
+
+=item page_down (I<page_down>)
+
+Move the cursor one screen up, or to the top of the buffer.
+
+=back
+
+=head2 Unmapped functions
+
+=over 4
+
+=item I<return_eof>
+
+End editing and return C<undef>.
+
+=item I<return_eof_maybe>
+
+End editing and return C<undef> if the buffer is completely empty.
+
+=item I<possible_completions>
+
+Like I<complete> but only shows the completions without
+actually doing them.
+
+=back
+
 =head1 ATTRIBS
 
-The hash with options can be accessed with the L<Attribs> method.
-Also they can be altered interactively using the mini-buffer of the command mode.
+The hash with options can be accessed with the L</Attribs> method.
+These can be modified from the rc-file (see L</FILES>) or can be set
+from the C<PERL_RL> environment variable. For example to disable the
+L</autolist> feature you can set C<PERL_RL='Zoid autolist=0'> before
+you start the application.
+
+( Also they can be altered interactively using the mini-buffer of 
+the command mode, see L<Term::ReadLine::Zoid::ViCommand>. )
 
 =over 4
 
 =item autohistory
 
 If enabled lines are added to the history automaticly,
-subject to L<MinLine>. By default enabled.
+subject to L</MinLine>. By default enabled.
 
 =item autoenv
 
@@ -744,16 +958,26 @@ By default enabled.
 
 =item automultiline
 
-See L<return> for a description. By default enabled.
+See L</return> for a description. By default enabled.
+
+=item beat
+
+This option can contain a CODE reference.
+It is called on the heartbeat event.
 
 =item bell
 
 This option can contain a CODE reference.
 The default is C<print "\cG">, which makes the terminal ring a bell.
 
-=item completion
+=item comment_begin
 
-TODO private completion hook
+This option can be set to a string, if the edit line starts with this string the line
+is regarded to be a comment and is not returned to the application, but it will appear
+in the history if 'autohistory' is also set. Defaults to "#".
+
+When there are multiple lines in the buffer they all need to start with the comment
+string for the buffer to be regarded as a comment.
 
 =item completion_function
 
@@ -771,18 +995,23 @@ The completion list is checked for double entries.
 
 There is B<no> default.
 
-=item ignore_comment
+FIXME tell about the meta fields for advanced completion
 
-This option can be set to a string, if the edit line starts with this string the line
-is regarded to be a comment and is not returned to the application, but it will appear
-in the history if 'autohistory' is also set. Defaults to "#".
+=item default_mode
 
-When there are multiple lines in the buffer they all need to start with the comment
-string for the buffer to be regarded as a comment.
+Specifies the mode the buffer starts in when you do a C<readline()>, also other
+modes return to this mode if you exit them.
+The default is 'insert' which is the single-line insert mode.
+If you always want to edit in multiline mode set this option to 'multiline'.
 
 =item maxcomplete
 
-Maximum number of completions to be displayed. By default set to 150.
+Maximum number of completions to be displayed, when the number of completions
+is bigger the user is asked before displaying them. If set to zero completions
+are always displayed.
+
+If this option is set to the string 'pager' the user is asked when the number of
+completions is to big to fit on screen and a pager would be used.
 
 =item minline
 
@@ -873,9 +1102,9 @@ C<$preput> can be used to set some text on the edit line allready.
 
 =item C<AddHistory($line)>
 
-Add a command to the history (subject to the L<minline> option).
+Add a command to the history (subject to the L</minline> option).
 
-If L<autohistory> is set this method will be called automaticly by L<readline>.
+If L</autohistory> is set this method will be called automaticly by L</readline>.
 
 =item C<IN()>
 
@@ -887,7 +1116,7 @@ Returns the filehandle used for output.
 
 =item C<MinLine($value)>
 
-Sets L<minline> option to C<$value> and returns old value.
+Sets L</minline> option to C<$value> and returns old value.
 
 =item C<findConsole()>
 
@@ -929,7 +1158,7 @@ Can be used to build a custom auto-mulitline feature.
 
 =item C<current()>
 
-Returns the current T:RL::Zoid object, for use in rc files, see L<FILES>.
+Returns the current T:RL::Zoid object, for use in rc files, see L</FILES>.
 
 =item C<bindkey($key, $sub, $map)>
 
@@ -943,7 +1172,7 @@ these aliases are not recursive.
 For alphanumeric characters the name is the character itself, special characters have
 long speaking names and control characters are prefixed with a '^'.
 
-Binding combination with the meta- or alt-key is not supported.
+Binding combination with the meta- or alt-key is not supported (see L</NOTES>).
 
 =back
 
@@ -967,21 +1196,30 @@ Reset all temporary attributes.
 =item C<save()>
 
 Returns a ref with a copy of some temporary attributes.
-Can be used to switch between multiple edit lines in combination with L<restore>.
+Can be used to switch between multiple edit lines in combination with L</restore>.
 
 =item C<restore($save)>
 
 Restores saved attributes.
 
-=item C<hist_up()>
+=item C<set_history($int)>
 
-Scroll one position backwards in the history and display it in the buffer.
+Sets history entry C<$int> in the buffer.
 
-=item C<hist_down()>
+=item C<longest_match(@completion)>
 
-Scroll one position forwards in the history and display it in the buffer.
+Returns the longest match among the completions followed by the completions
+itself. Used for completion functions.
 
 =back
+
+=head1 DEVELOPMENT
+
+FIXME minimum subroutines new mode-class
+
+FIXME how to set up a keymap
+
+FIXME how to add a keymap/mode
 
 =head1 NOTES
 
@@ -1000,6 +1238,8 @@ please contact me.
 
 Line wrap doesn't always displays the last character on the line right, no functional bug though.
 
+If the buffer size exceeds the screen size some bugs appear in the rendering.
+
 Please mail the author if you find any other bugs.
 
 =head1 AUTHOR
@@ -1015,6 +1255,7 @@ modify it under the same terms as Perl itself.
 L<Term::ReadLine::Zoid::ViCommand>,
 L<Term::ReadLine::Zoid::MultiLine>,
 L<Term::ReadLine::Zoid::ISearch>,
+L<Term::ReadLine::Zoid::FileBrowse>,
 L<Term::ReadLine::Zoid::Base>,
 L<Term::ReadLine>,
 L<Env::PS1>,

@@ -3,11 +3,14 @@ package Term::ReadLine::Zoid::Base;
 use strict;
 no warnings;
 use Term::ReadKey qw/ReadMode ReadKey GetTerminalSize/;
+#use encoding 'utf8';
 no warnings; # undef == '' down here
 
-our $VERSION = '0.04';
+our $VERSION = '0.05';
 
 $| = 1;
+
+our @_key_buffer;
 
 our %chr_map = ( # partial sequences
 	"\e"    => '',
@@ -25,8 +28,8 @@ our %chr_names = ( # named keys
 	"\e"   => 'escape',
 	"\cH"  => 'backspace',
 	"\cI"  => 'tab',
-	"\cJ"  => 'return',
-	"\cM"  => 'return',    # \r not always correctly translated
+	"\cJ"  => 'return',    # line feed
+	"\cM"  => 'return',    # carriage return
 	"\c?"  => 'backspace', # traditionally known as DEL
 
 	"\e[A" => 'up',			"\eOA" => 'up',
@@ -101,17 +104,17 @@ sub loop {
 	$$self{lines} = [''] unless @{$$self{lines}};
 	$$self{term_size} = [ (GetTerminalSize($$self{IN}))[0,1] ];
 	@ENV{'COLUMNS', 'LINES'} = @{$$self{term_size}} if $$self{config}{autoenv};
+	$self->draw();
 	$$self{_loop} = 1;
 	while ($$self{_loop}) {
-		$self->draw();
 		$self->do_key();
+		while (@_key_buffer) { $self->do_key() }
+		$self->draw();
 	}
 	$self->cursor_at(@{$$self{_buffer_end}});
 }
 
-sub beat { } # to be overloaded 
-
-our @_key_buffer;
+sub beat { $_[0]{config}{beat}->() if exists $_[0]{config}{beat} }
 
 sub read_key { die "deprecated warning" if $_[1];
 	my $self = shift;
@@ -120,13 +123,7 @@ sub read_key { die "deprecated warning" if $_[1];
 	my $chr;
 	ReadMode('raw', $$self{IN});
 	{
-		local $SIG{WINCH} = sub {
-			local $SIG{WINCH} = 'IGNORE';
-			$$self{term_size} = [ (GetTerminalSize($$self{IN}))[0,1] ];
-			@ENV{'COLUMNS', 'LINES'} = @{$$self{term_size}}
-				if $$self{config}{autoenv};
-			$self->draw();
-		};
+		local $SIG{WINCH} = sub { $$self{_SIGWINCH} = 1 };
 
 		while ( not defined ($chr = ReadKey(1, $$self{IN})) ) { $self->beat() }
 
@@ -159,26 +156,25 @@ sub do_key {
 	if (exists $chr_names{$key}) { $key = $chr_names{$key} }
 	elsif (length $key < 2) {
 		my $ord = ord $key;
-		$key =	  ($ord < 32)   ? '^'.(chr $ord + 64) 
-			: ($ord == 127) ? '^?' : $key ;
+		$key =	  ($ord < 32)   ? 'ctrl_'  . (chr $ord + 64)
+			: ($ord == 127) ? 'ctrl_?' : $key ;
 	}
 
-	# check for aliases
-	$key = $$self{key_map}{$key}
-		if exists $$self{key_map}{$key} and ! ref $$self{key_map}{$key};
-
-	# get ctrl prefix good
-	my $sub = $key;
-	if ($key =~ /^\^(.)$/) {
-		$key = '^'.uc($1);
-		$sub = 'ctrl_'.lc($1);
+	my $map = $$self{keymaps}{$$self{mode}};
+	my $sub;
+	DO_KEY:
+	if (exists $$map{$key}) { $sub = $$map{$key} }
+	elsif (exists $$map{_isa}) {
+		$map = $$self{keymaps}{ $$map{_isa} }
+			|| return warn "$$map{_isa}: no such keymap\n\n";
+		goto DO_KEY;
 	}
-
-	# and here we go
-	my $r = exists( $$self{key_map}{$key} ) ? $$self{key_map}{$key}->($key, @_) :
-		$self->can($sub) ? $self->$sub($key, @_) : $self->default($key) ;
+	elsif (exists $$map{_default}) { $sub = $$map{_default} }
+	else { $sub = 'bell' }
+	#print STDERR "# key: $key sub: $sub\n";
+	my $re = ref($sub) ? $sub->($self, $key, @_) : $self->$sub($key, @_) ;
 	$$self{last_key} = $key;
-	return $r;
+	return $re;
 }
 
 sub print {
@@ -187,9 +183,15 @@ sub print {
 	my ($self, $lines, $pos) = @_;
 #	use Data::Dumper;
 #	print STDERR Dumper $lines, $pos;
+	if ($$self{_SIGWINCH}) { # GetTerminalSize is kind of heavy
+		$$self{term_size} = [ (GetTerminalSize($$self{IN}))[0,1] ];
+		@ENV{'COLUMNS', 'LINES'} = @{$$self{term_size}} if $$self{config}{autoenv};
+		$$self{_SIGWINCH} = 0;
+	}
+
+	my ($width, $higth) = @{$$self{term_size}};
 
 	# calculate how line wrap will work out
-	my $width = $$self{term_size}[0];
 	my @nlines = map { int(print_length($_) / $width) } @$lines;
 	$$pos[1] += $nlines[$_] for 0 .. $$pos[1] - 1;
 	$$pos[1] += int($$pos[0] / $width);
@@ -199,18 +201,32 @@ sub print {
 	# get the lines at the right position
 	my $buffer = -1; # always 1 lines minimum
 	$buffer += 1 + $_ for @nlines;
-	if ($buffer > $$self{_buffer}) { # clear screen area
-		$self->cursor_at(@{$$self{term_size}});
-		print { $$self{OUT} } "\n" x ($buffer - $$self{_buffer});
-		$$self{_buffer} = $buffer;
+	my $null = 1;
+	if ($buffer > $higth) { # big buffer or small screen :$
+		# FIXME does not yet reckon with line wrap
+		# FIXME some +1 or -1 offsets not right
+		my $offset = $$pos[1] - $$self{scroll_pos};
+		if ($offset < 0) { $$self{scroll_pos} = $$pos[1] }
+		elsif ($offset > $higth) { $$self{scroll_pos} += $offset - $higth }
+		@$lines = splice @$lines, $$self{scroll_pos}, $higth;
+		$$pos[1] -= $$self{scroll_pos};
+		$$self{_buffer_end} = [$width, $higth];
+		$$self{_buffer} = $higth;
 	}
-	my $null = $$self{term_size}[1] - $$self{_buffer};
+	else { # normal readline buffer
+		if ($buffer > $$self{_buffer}) { # clear screen area
+			$self->cursor_at(@{$$self{term_size}});
+			print { $$self{OUT} } "\n" x ($buffer - $$self{_buffer});
+			$$self{_buffer} = $buffer;
+		}
+		$null = $$self{term_size}[1] - $$self{_buffer};
+		$$self{_buffer_end} = [print_length($$lines[-1]), $null + $buffer]; # save real cursor
+	}
 	$self->cursor_at(1, $null);
 	print { $$self{OUT} } $$lines[$_], "\e[K\n" for 0 .. $#$lines - 1;
 	print { $$self{OUT} } $$lines[-1], "\e[J";
 
-	$$self{_buffer_end} = [print_length($$lines[-1]), $null + $buffer]; # save real cursor
-	$self->cursor_at($$pos[0]+1, $null+$$pos[1]); # set cursor
+	$self->cursor_at($$pos[0]+1, $$pos[1]+$null); # set cursor
 }
 
 # ######### #
@@ -246,17 +262,14 @@ sub output {
 	$self->cursor_at(@{$$self{_buffer_end}});
 	print { $$self{OUT} } "\n";
 
-	if (@items > 1 and @items > $$self{config}{maxcomplete}) { # hack
-		print { $$self{OUT} } 'Display all ', scalar(@items), ' possibilities? [yN]';
-		my $answ = $self->read_key();
-		print { $$self{OUT} } "\n";
-		return unless $answ =~ /y/i;
-	}
-	elsif (@items > 1) { @items = $self->col_format(@items) }
-	else { @items = split /\n/, $items[0] }
+	my ($max, $cnt) = ($$self{config}{maxcomplete}, scalar @items);
+	$self->_ask($cnt) or return if $max and $max =~ /^\d+$/ and $cnt > $max;
+
+	@items = ($cnt > 1) ? ($self->col_format(@items)) : (split /\n/, $items[0]);
 
 	$$self{_buffer} = (@items < $$self{_buffer}) ? ($$self{_buffer} - @items) : 0;
 	if (@items > $$self{term_size}[1]) {
+		$self->_ask($cnt) or return if $max and $max eq 'pager';
 		my $pager = $ENV{PAGER} || 'more';
 		eval {
 			local $SIG{PIPE} = 'IGNORE';
@@ -266,6 +279,14 @@ sub output {
 		} ;
 	}
 	else { print { $$self{OUT} } join("\n", @items), "\n" }
+}
+
+sub _ask {
+	my ($self, $cnt) = @_;
+	print { $$self{OUT} } "Display all $cnt possibilities? [yN]";
+	my $answ = $self->read_key();
+	print { $$self{OUT} } "\n";
+	return( ($answ =~ /y/i) ? 1 : 0 );
 }
 
 sub col_format { # takes minimum number of rows, but fills cols first
@@ -340,7 +361,7 @@ sub new_line {
 	}
 }
 
-sub cls { print { $_[0]{OUT} } "\e[2J" }
+sub clear_screen { print { $_[0]{OUT} } "\e[2J" }
 
 sub print_length {
 	my $string = pop;
@@ -388,7 +409,7 @@ should contain valid filehandles.
 
 Positions the cursor on screen, dimensions are 1-based.
 
-=item C<cls()>
+=item C<clear_screen()>
 
 Clear screen.
 

@@ -4,13 +4,31 @@ use strict;
 use base 'Term::ReadLine::Zoid';
 no warnings; # undef == '' down here
 
-our $VERSION = 0.01;
+our $VERSION = 0.05;
 
-# sub _on_switch {
-# 	$$self{is_lock} = undef;
-# 	$$self{is_save} = [[''], [0,0], undef];
-# 	return 'Term::ReadLine::Zoid::ISearch';
-# }
+our %_keymap = (
+	backspace  => 'backward_delete_char',
+	ctrl_R     => 'isearch_again',
+	_on_switch => 'is_switch',
+	_default   => 'self_insert'
+);
+
+sub keymap { return \%_keymap }
+
+sub is_switch {
+	my $self = shift;
+	$$self{is_lock} = undef;
+	$$self{is_hist_p} = -1;
+	$$self{is_save} = [[''], [0,0], undef];
+}
+
+sub is_switch_back {
+	my ($self, $key) = @_;
+	$$self{_hist_save} = $self->save();
+	@$self{qw/lines pos hist_p/} = @{$$self{is_save}};
+	$self->switch_mode();
+	$self->do_key($key);
+}
 
 sub draw { # rendering this inc mode is kinda consuming
 	my ($self, @args) = @_;
@@ -19,15 +37,15 @@ sub draw { # rendering this inc mode is kinda consuming
 	$$self{prompt} = "i-search qr($string): ";
 	goto DRAW unless length $string;
 
-	my ($result, $match, $hist_p) = (undef, '', -1);
+	my ($result, $match, $hist_p) = (undef, '', $$self{is_hist_p});
 	$$self{last_search} = ['b', $string];
 	my $reg = eval { qr/^(.*?$string)/ };
 	goto DRAW if $@;
 
-	for (@{$$self{history}}) {
+	while ($hist_p < $#{$$self{history}}) {
 		$hist_p++;
-		next unless $_ =~ $reg;
-		($result, $match) = ($_, $1);
+		next unless $$self{history}[$hist_p] =~ $reg;
+		($result, $match) = ($$self{history}[$hist_p], $1);
 		last;
 	}
 
@@ -37,41 +55,23 @@ sub draw { # rendering this inc mode is kinda consuming
 		$$self{lines} = [ split /\n/, $result ];
 		my @match = split /\n/, $match;
 		$$self{pos} = [length($match[-1]), $#match];
-		$$self{is_save} = [ $$self{lines}, $$self{pos}, $hist_p];
 	}
 	else { $$self{is_lock} = 1 }
 
 	DRAW: Term::ReadLine::Zoid::draw($self, @args);
+	$$self{is_save} = [ $$self{lines}, $$self{pos}, $hist_p];
 	$self->restore($save);
 }
 
-sub default {
+sub self_insert {
 	if ($_[0]{is_lock}) { $_[0]->bell }
-	else { goto \&Term::ReadLine::Zoid::default }
+	elsif (exists $_[0]{keymaps}{ $_[0]{config}{default_mode} }{$_[1]}) {
+		goto \&is_switch_back;
+	}
+	else { goto \&Term::ReadLine::Zoid::self_insert }
 }
 
-sub escape {
-	@{$_[0]}{qw/lines pos hist_p/} = @{$_[0]{is_save}};
-	$_[0]->switch_mode();
-	$_[0]->do_key('escape');
-}
-
-sub _switch_back {
-	my ($self, $key) = @_;
-	$$self{_hist_save} = $self->save();
-	@$self{qw/lines pos hist_p/} = @{$$self{is_save}};
-	$self->switch_mode();
-	$self->do_key($key);
-}
-
-# make some aliases
-no strict 'refs';
-*{$_} = \&_switch_back for qw/left right home end up down return ctrl_u/;
-
-sub backspace { # overrule the left alias
-	Term::ReadLine::Zoid::left($_[0]);
-	$_[0]->delete();
-}
+sub isearch_again { $_[0]{is_hist_p} = $_[0]{last_search}[-1] if $_[0]{last_search} }
 
 1;
 
@@ -93,6 +93,9 @@ found in the gnu readline library.
 
 In this mode the string you enter is regarded as a B<perl regex> which is used
 to do an incremental histroy search.
+
+Pressing '^R' repeatingly will give alternative results.
+
 Special keys like movements or the C<return> drop you out of this mode
 and set the edit line to the last search result.
 
