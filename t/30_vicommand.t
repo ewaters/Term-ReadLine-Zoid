@@ -1,7 +1,11 @@
 
 use strict;
-use Test::More tests => 16;
-use Term::ReadLine::Zoid::ViCommand;
+
+BEGIN {
+	require Test::More;
+	use Term::ReadLine::Zoid::ViCommand;
+	Test::More->import( tests => 18 + scalar @Term::ReadLine::Zoid::ViCommand::vi_motions - 6 );
+}
 
 my $t;
 $t = Term::ReadLine::Zoid::ViCommand->new('test');
@@ -19,8 +23,6 @@ test_reset $t;
 $t->{vi_command} = '!**^sgf@#$34342dfs#$fsg#$4g^$^)*!fgd';
 $t->press("\e");
 ok $t->{vi_command} eq '', 'escape reset';
-
-# our @vi_motions = (' ', ',', qw/0 b F l W ^ $ ; E f T w | B e h t/);
 
 # h, l/space (left, right)
 test_reset $t;
@@ -90,10 +92,22 @@ ok $t->{lines}[0] eq 'n jaa', '4.';
 # $
 # 0
 # [I<count>] |
+
 # [I<count>] f I<char>
 # [I<count>] F I<char>
 # [I<count>] t I<char>
 # [I<count>] T I<char>
+
+#TODO multiline the fFtT function
+#test_reset $t;
+#$t->press("\e");
+#for ( ['fs', []], ['Fs', []], ['ts', []], ['Ts', []] ) {
+#	test_reset $t;
+#	$t->press($$_[0]);
+#	print "# $$_[0]: $t->{pos}[0], $t->{pos}[1]\n";
+#	is_deeply $t->{pos}, $$_[1], $$_[0];
+#}
+
 # [I<count>] ;
 # [I<count>] ,
 # [I<count>] c I<motion>
@@ -115,8 +129,32 @@ ok $t->{lines}[0] eq ' word3 word2 word1', '_';
 
 # [I<count>] x
 # [I<count>] X
+
 # [I<count>] d I<motion>
 # D
+
+# lines have to change, the exact change isn't tested here,
+# thats up to the motion test
+
+test_reset $t;
+$t->press("\e");
+my $lines = join '', @{$$t{lines}};
+#TODO multiline the fFtT function
+#$t->press('fs'); # for repeat movements
+for my $k (@Term::ReadLine::Zoid::ViCommand::vi_motions, 'd') {
+	test_reset $t;
+	my $p = 'd'.$k;
+	next if grep {$_ eq $k} qw/f F t T ;/, ',';
+#	$p .= 's' if grep {$_ eq $k} qw/f F t T/;
+	$p = '1'.$p if $k eq '|';
+	$t->press($p);
+	ok length( join( '', @{$$t{lines}}) ) < length $lines, $p;
+}
+
+test_reset $t;
+$t->press('D');
+ok length( join( '', @{$$t{lines}}) ) < length $lines, 'D';
+
 # [I<count>] y I<motion>
 # Y
 # [I<count>] p

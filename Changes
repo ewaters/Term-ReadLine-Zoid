@@ -1,6 +1,24 @@
 Revision history for Term-ReadLine-Zoid - another ReadLine package
 
-0.01 Sun Mar 28
+0.02 Tue May 25 2004
+
+     Mon May 24
+        - Added support for more advanced completion functions
+
+     Sun May 23
+        - Added "RPS1" setting after reading something about zsh on /.
+	- Made it possible for the prompts to be a scalar reference
+
+     Fri May 21
+        - Fixed an AUTOLOADER inheritance problem leading to bugs in zoid
+
+     Sun May 16
+        - Added some simple emacs bindings like ^F, ^B etc.
+
+     Tue Mar 30
+        - Fixed typo in the synopsis, patch by Mike Castle
+
+0.01 Sun Mar 28 2004
 	Initial feature set is complete enough to release
 
      Thu Jan 15 2004

@@ -5,7 +5,7 @@ no warnings;
 use Term::ReadKey qw/ReadMode ReadKey GetTerminalSize/;
 no warnings; # undef == '' down here
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 
 $| = 1;
 
@@ -246,14 +246,15 @@ sub output {
 	$self->cursor_at(@{$$self{_buffer_end}});
 	print { $$self{OUT} } "\n";
 
-	if (@items > $$self{config}{maxcomplete}) {
+	if (@items > 1 and @items > $$self{config}{maxcomplete}) { # hack
 		print { $$self{OUT} } 'Display all ', scalar(@items), ' possibilities? [yN]';
 		my $answ = $self->read_key();
 		print { $$self{OUT} } "\n";
 		return unless $answ =~ /y/i;
 	}
+	elsif (@items > 1) { @items = $self->col_format(@items) }
+	else { @items = split /\n/, $items[0] }
 
-	@items = $self->col_format(@items) if @items > 1;
 	$$self{_buffer} = (@items < $$self{_buffer}) ? ($$self{_buffer} - @items) : 0;
 	print { $$self{OUT} } join("\n", @items), "\n";
 }
@@ -311,9 +312,11 @@ sub cursor_at { print { $_[0]{OUT} } "\e[$_[2];$_[1]H" } # ($x, $y) 1-based !
 
 sub new_line {
 	my $self = shift;
+	return unless -t $$self{OUT} and -t $$self{IN};
 
 	ReadMode 'raw';
 	my $r;
+	print { $$self{OUT} } "\e[6n";
 	$r = ReadKey( -1, $$self{IN}) || return print { $$self{OUT} } "\n";
 	while ($r =~ /^(\e|\e\[\d*|\e\[\d+;\d*)$/) { $r .= ReadKey -1, $$self{IN} }
 	# in this case timed read doesn't work :(

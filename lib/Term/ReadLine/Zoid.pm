@@ -6,7 +6,7 @@ use Term::ReadLine::Zoid::Base;
 no warnings; # undef == '' down here
 
 our @ISA = qw/Term::ReadLine::Zoid::Base Term::ReadLine::Stub/; # explicitly not using T:RL::Stub
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 
 sub import { # terrible hack - Term::ReadLine 5.6.x is defective
 	return unless (caller())[0] eq 'Term::ReadLine' and $] < 5.008 ;
@@ -101,7 +101,7 @@ sub readline {
 	$$self{lines}  = [ split /\n/, $preput ] if defined $preput;
 	my $title = $$self{config}{title} || $$self{appname};
 	$self->title($title);
-#	$self->new_line();
+	$self->new_line();
 	$self->loop();
 	return $self->_return();
 }
@@ -294,18 +294,26 @@ sub draw {
 	}ge; $_} @lines;
 
 	# render prompt - ugly "set nu" code by carl0s
-	my $prompt = "$$self{prompt}"; # think overload '"'
+	my $prompt = ref($$self{prompt}) ? ${$$self{prompt}} : $$self{prompt};
 	my $ps2len = length(@lines) + 2; # reserved space for line numbers
 	$prompt =~ s/(!!|!)/($1 eq '!!') ? '!' : $$self{hist_cnt}/eg;
 	my @prompt = split /\n/, $prompt;
 	@prompt = ('') unless @prompt;
+	my $ps2 = ref($$self{config}{PS2}) ? ${$$self{config}{PS2}} : $$self{config}{PS2};
 	$pos[0] += !$pos[1] ? $self->print_length($prompt[-1]) 
-		: ( $self->print_length("$$self{config}{PS2}") 
-			+ ( $self->{config}{nu} ? $ps2len : 0 ) );
+		: ( $self->print_length($ps2)  + ( $self->{config}{nu} ? $ps2len : 0 ) );
 	$pos[1] += $#prompt;
-	$lines[$_] =  (($self->{config}{nu} && $_) ? sprintf("\e[%dm% ${ps2len}d\e[0m ",33, $_ + 1) : '').$$self{config}{PS2}. $lines[$_] for 1 .. $#lines;
+	$lines[$_] =  (($self->{config}{nu} && $_) ? sprintf("\e[%dm% ${ps2len}d\e[0m ",33, $_ + 1) : '').$ps2.$lines[$_] for 1 .. $#lines;
 	$lines[0] = pop(@prompt) . $lines[0];
 	unshift @lines, @prompt if @prompt;
+
+	# right prompt ... idea from zsh
+	my $l = $self->print_length($lines[0]);
+	my $rprompt = ref($$self{config}{RPS1}) ? ${$$self{config}{RPS1}} : $$self{config}{RPS1};
+	if ($rprompt and $l < $$self{term_size}[0]) {
+		$rprompt = substr $rprompt, - $$self{term_size}[0] + $l -1;
+		$lines[0] .= (' 'x($$self{term_size}[0] - $l - $self->print_length($rprompt) -1)) . $rprompt;
+	}
 
 	$self->print(\@lines, \@pos);
 }
@@ -404,23 +412,30 @@ sub tab {
 
 	# get the completions and output
 	my @compl = $func->($word, $buffer, $end - $lw); # word, line, start
-#	$self->output( ${shift(@compl)} ) if ref $compl[0]; # undocumented message feature
+	my $meta = ref($compl[0]) ? shift(@compl) : {} ; # hash constitutes an undocumented feature
+	$self->output( $$meta{message} ) if $$meta{message};
 
 	return $self->bell unless @compl;
 	if ($compl[0] eq $compl[-1]) { @compl = ($compl[0]) } # 1 item or list with only duplicates
 	else { @compl = $self->longest_match(@compl) } # returns $compl, @compl
 
 	my $compl = shift @compl;
+	$compl = $$meta{prefix} . $compl;
 	if (@compl) {
 		if ($$self{config}{autolist}) { $self->output( @compl ) }
 		else { $$self{completions} = \@compl }
 	}
-	elsif ($compl =~ /\w$/) { $compl .= ' ' } # arbitrary cruft
+	else {
+		$compl .= $$meta{postfix};
+		$compl =~ s{([\s\*\?\[\]\{\}])}{\\$1}g unless $$meta{quoted};
+		$compl .= $$meta{quoted}.' ' if $compl =~ /\w$/; # arbitrary cruft
+	}
 
 	# update buffer
 	push @{$$self{undostack}}, $self->save() if length $compl;
 #	print STDERR ">>$buffer<< end $end off: ".($end - $lw)." l: $lw c: $compl\n";
-	substr $buffer,  $end - $lw, $lw, $compl;
+	my $start = $$meta{start} or $end - $lw;
+	substr $buffer,  $start, $end - $start, $compl;
 	$$self{lines} = [ split /\n/, $buffer ];
 	$$self{pos}[0] -= $lw - length($compl); # for the moment completions can't contains \n
 }
@@ -474,13 +489,19 @@ sub left { # including cnt for vi mode
 	return 1;
 }
 
-*up = \&hist_up; # define sub up
-
-*down = \&hist_down; # define sub down
+sub home { $_[0]{pos}[0] = 0; return 1 }
 
 sub end { $_[0]{pos}[0] = length $_[0]{lines}[ $_[0]{pos}[1] ]; return 1 }
 
-sub home { $_[0]{pos}[0] = 0; return 1 }
+# define various aliases
+*ctrl_b = \&left;
+*ctrl_f = \&right;
+*up     = \&hist_up;
+*ctrl_p = \&hist_up;
+*down   = \&hist_down;
+*ctrl_n = \&hist_down;
+*ctrl_a = \&home;
+*ctrl_e = \&end;
 
 sub ctrl_v {
 	# FIXME set signals to ingnore (?)
@@ -500,6 +521,11 @@ sub ctrl_w {
 
 sub ctrl_l { $_[0]->cls() }
 
+sub ctrl_k {
+	my $self = shift;
+	$$self{lines}[ $$self{pos}[1] ] = substr $$self{lines}[ $$self{pos}[1] ], 0, $$self{pos}[0];
+}
+
 1;
 
 __END__
@@ -511,8 +537,8 @@ Term::ReadLine::Zoid - another ReadLine package
 =head1 SYNOPSIS
 
 	# In your app:
-	use Term::Readline;
-	my $term = Term::Readline->new("my app");
+	use Term::ReadLine;
+	my $term = Term::ReadLine->new("my app");
 	
 	my $prompt = "eval: ";
 	my $OUT = $term->OUT || \*STDOUT;
@@ -606,6 +632,10 @@ option.
 To enter the real multiline editing mode, press 'escape m',
 see L<Term::ReadLine::Zoid::MultiLine>.
 
+=item ^K
+
+Delete from cursor to the end of the line.
+
 =item ^L
 
 Clear entire screen.
@@ -633,17 +663,37 @@ Delete the word before the cursor.
 
 Toggle replace bit.
 
+=item ^A
+
+=item home
+
+Move cursor to the begin of the edit line.
+
+=item ^E
+
+=item end
+
+Move cursor to the end of the edit line.
+
+=item ^B
+
 =item left
+
+=item ^F
 
 =item right
 
-These arrow keys can be used to move the cursor in the edit line.
+These keys can be used to move the cursor in the edit line.
+
+=item ^P
 
 =item up
 
+=item ^N
+
 =item down
 
-These arrow keys are used to rotate the history.
+These keys are used to rotate the history.
 
 =back
 
@@ -726,6 +776,11 @@ It defaults to C<< "> " >>.
 
 Although the "PS1" prompt (as specified as an argument to the C<readline()> method)
 can contain newlines, the PS2 prompt can't.
+
+=item RPS1
+
+This option can contain a string that will be shown on the right side of the screen.
+This is known as the "right prompt" and the idea is stolen from zsh(1).
 
 =item title
 

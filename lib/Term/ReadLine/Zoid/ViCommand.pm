@@ -1,13 +1,22 @@
 package Term::ReadLine::Zoid::ViCommand;
 
 use strict;
+use vars '$AUTOLOAD';
 no strict 'refs';
-use AutoLoader 'AUTOLOAD';
+use AutoLoader;
 use Term::ReadKey qw/ReadMode ReadKey GetTerminalSize/;
 use base 'Term::ReadLine::Zoid::MultiLine';
 no warnings; # undef == '' down here
 
-our $VERSION = 0.01;
+our $VERSION = 0.02;
+
+sub AUTOLOAD { # more intelligent inheritance
+	my $sub = $AUTOLOAD;
+	$sub =~ s/.*:://;
+	my $m = $_[0]->can($sub) ? 'AutoLoader' : 'Term::ReadLine::Zoid';
+	${$m.'::AUTOLOAD'} = $AUTOLOAD;
+	goto &{$m.'::AUTOLOAD'};
+}
 
 =head1 NAME
 
@@ -339,7 +348,7 @@ sub vi_repeat {
 =item v
 
 Edit the buffer with the editor specified by the C<EDITOR> environment variable
-ot the L<editor> option, defaults to 'vi'.
+or the L<editor> option, defaults to 'vi'.
 
 This function requires the L<File::Temp> module from cpan, which in turn needs 
 File::Spec and other packages. If these are not available this functions is
@@ -379,7 +388,7 @@ exists of alphanumeric chars only.)
 
 =cut
 
-sub vi_W { # move to next begin word/bigword
+sub vi_W { # no error, just end of line
 	my ($self, $key, $cnt) = @_;
 	my $w = ($key eq 'W') ? '\\S' : '\\w';
 	my $l = $$self{lines}[ $$self{pos}[1] ];
@@ -387,6 +396,7 @@ sub vi_W { # move to next begin word/bigword
 		if ($l =~ /^.{$$self{pos}[0]}(.+?)(?<!$w)$w/) { $$self{pos}[0] += length $1 }
 		else { $self->end; last; }
 	}
+	return 1;
 }
 
 =item [I<count>] e 
@@ -397,14 +407,15 @@ Move the cursor to the end of the current word or bigword.
 
 =cut
 
-sub vi_E {
+sub vi_E { # no error, just end of line
 	my ($self, $key, $cnt) = @_;
 	my $w = ($key eq 'E') ? '\\S' : '\\w';
 	my $l = $$self{lines}[ $$self{pos}[1] ];
 	for (1..$cnt) {
 		if ($l =~ /^.{$$self{pos}[0]}(.*?$w+)/) { $$self{pos}[0] += length $1 }
-		else { $self->bell; last; }
+		else { $self->end; last; }
 	}
+	return 1;
 }
 
 =item [I<count>] b 
@@ -415,7 +426,7 @@ Move the cursor to the begin of the current word or bigword.
 
 =cut
 
-sub vi_B { 
+sub vi_B { # no error, just begin of line
 	my ($self, $key, $cnt) = @_;
 	my $w = ($key eq 'B') ? '\\S' : '\\w';
 	my $l = $$self{lines}[ $$self{pos}[1] ];
@@ -423,7 +434,8 @@ sub vi_B {
 		$l = substr($l, 0, $$self{pos}[0]);
 		if ($l =~ /($w+[^$w]*)$/) { $$self{pos}[0] -= length $1 }
 		else { $self->home; last; }
-	}	
+	}
+	return 1;
 }
 
 =item ^
@@ -453,7 +465,7 @@ Set the cursor to position I<count> (1-based).
 
 =cut
 
-sub vi_cursor { $_[0]{pos}[0] = $_[2] - 1 }
+sub vi_cursor { $_[0]{pos}[0] = $_[2] - 1; 1; }
 
 =item [I<count>] f I<char>
 
@@ -489,16 +501,14 @@ sub vi_F {
 	my ($l, $x) = ( $$self{lines}[ $$self{pos}[1] ], $$self{pos}[0] );
 	if ($key eq 'T' or $key eq 'F') {
 		$l = substr($l, 0, $x);
-		if ($l =~ /.*((?:$chr.*){$cnt})$/) {
-			$$self{pos}[0] -= length($1) - (($key eq 'T') ? 1 : 0);
-		}
-		else { return $self->bell }
+		return $self->bell unless $l =~ /.*((?:$chr.*){$cnt})$/;
+		$$self{pos}[0] -= length($1) - (($key eq 'T') ? 1 : 0);
+		return length($1);
 	}
 	else { # ($key eq 't' || $key eq 'f')
-		if ($l =~ /^..{$x}((?:.*?$chr){$cnt})/) {
-			$$self{pos}[0] += length($1) - (($key eq 't') ? 1 : 0);
-		}
-		else { return $self->bell }
+		return $self->bell unless $l =~ /^..{$x}((?:.*?$chr){$cnt})/;
+		$$self{pos}[0] += length($1) - (($key eq 't') ? 1 : 0);
+		return length($1);
 	}
 }
 
@@ -1100,6 +1110,8 @@ This program is free software; you can redistribute it and/or
 modify it under the same terms as Perl itself.
 
 =head1 SEE ALSO
+
+L<Term::ReadLine::Zoid>
 
 =cut
 
