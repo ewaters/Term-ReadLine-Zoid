@@ -1,5 +1,12 @@
 Revision history for Term-ReadLine-Zoid - another ReadLine package
 
+0.06 Wed Sep 15 2004
+        - Fixed a bug in the clear_screen() function
+	- Touched documentation for FileBrowse
+	- Changed return_empty_string logic
+	- Added T:RL:Z::Emacs with 'emacs' and 'emacs_multiline' modes
+	- Added ^O (operate_and_get_next)
+
 0.05 Mon Sep  6 2004
         Release to accompany the 0.90 release of Zoidberg to Adam.pm
         - Made 'beat' also an attribute

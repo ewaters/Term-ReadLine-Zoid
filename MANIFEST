@@ -3,6 +3,7 @@ Changes
 example.pl
 lib/Term/ReadLine/Zoid.pm
 lib/Term/ReadLine/Zoid/Base.pm
+lib/Term/ReadLine/Zoid/Emacs.pm
 lib/Term/ReadLine/Zoid/FileBrowse.pm
 lib/Term/ReadLine/Zoid/ISearch.pm
 lib/Term/ReadLine/Zoid/ViCommand.pm

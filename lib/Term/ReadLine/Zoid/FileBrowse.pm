@@ -186,26 +186,45 @@ __END__
 
 =head1 NAME
 
-Term::ReadLine::Zoid::FileBrowse - simple module
+Term::ReadLine::Zoid::FileBrowse - a readline file browser mode
 
 =head1 SYNOPSIS
 
+This class is used as a mode under L<Term::ReadLine::Zoid>,
+see there for usage details.
 
 =head1 DESCRIPTION
 
-This module provides a "file browse" mode for L<Term::ReadLine::Zoid>.
+This module provides a "file browse" mode that lets you interactively select files
+and navigate your file-system.
 
-=head1 EXPORT
-
-None by default.
-
-=head1 METHODS
+=head1 KEY MAPPING
 
 =over 4
 
-=item C<new()>
+=item up  (I<select_previous>)
 
-Simple constructor
+=item down  (I<select_next>)
+
+=item right  (I<select_next_col>)
+
+=item left  (I<select_previous_col>)
+
+=item page_up  (I<page_up>)
+
+=item page_down  (I<page_down>)
+
+=item return  (I<accept_line>)
+
+=item ^C  (I<return_empty_string>)
+
+=item escape  (I<switch_mode>)
+
+=item /  (I<fb_mini_buffer>)
+
+=item space  (I<toggle_mark>)
+
+=item .  (I<toggle_hide_hidden>)
 
 =back
 
@@ -223,6 +242,8 @@ This program is free software; you can redistribute it and/or
 modify it under the same terms as Perl itself.
 
 =head1 SEE ALSO
+
+L<Term::ReadLine::Zoid>
 
 =cut
 

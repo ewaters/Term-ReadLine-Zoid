@@ -7,7 +7,7 @@ use Term::ReadLine::Zoid::Base;
 no warnings; # undef == '' down here
 
 our @ISA = qw/Term::ReadLine::Zoid::Base Term::ReadLine::Stub/; # explicitly not use'ing T:RL::Stub
-our $VERSION = '0.05';
+our $VERSION = '0.06';
 
 sub import { # terrible hack - Term::ReadLine in perl 5.6.x is defective
 	return unless (caller())[0] eq 'Term::ReadLine' and $] < 5.008 ;
@@ -38,6 +38,7 @@ our %_config  = (
 our %_keymaps = (
 	insert => {
 		return	=> 'accept_line',
+		ctrl_O	=> 'operate_and_get_next',
 		ctrl_D	=> 'delete_char_or_eof',
 		ctrl_C	=> 'return_empty_string',
 		escape	=> 'switch_mode_command',
@@ -77,8 +78,10 @@ our %_keymaps = (
 		_isa	=> 'insert',
 	},
 	command => { _use => 'Term::ReadLine::Zoid::ViCommand'  },
-	isearch => { _use => 'Term::ReadLine::Zoid::ISearch'    },
+	emacs   => { _use => 'Term::ReadLine::Zoid::Emacs'      },
+	emacs_multiline => { _use => 'Term::ReadLine::Zoid::Emacs' },
 	fbrowse => { _use => 'Term::ReadLine::Zoid::FileBrowse' },
+	isearch => { _use => 'Term::ReadLine::Zoid::ISearch'    },
 );
 
 sub _init {
@@ -155,6 +158,9 @@ sub readline {
 	my $title = $$self{config}{title} || $$self{appname};
 	$self->title($title);
 	$self->new_line();
+	if ($$self{prev_hist_p}) {
+		$self->set_history( delete $$self{prev_hist_p} );
+	}
 	$self->loop();
 	return $self->_return();
 }
@@ -164,6 +170,7 @@ sub _return { # also used by continue
 	bless $self, $$self{class}; # rebless default class
 	print { $$self{OUT} } "\n";
 	return undef unless defined $$self{_loop}; # exit application
+	return '' unless length $$self{_loop}; # return empty string
 	my $string = join("\n", @{$$self{lines}}) || '';
 	$self->AddHistory($string) if $$self{config}{autohistory};
 	return '' if $$self{config}{comment_begin}
@@ -241,7 +248,8 @@ sub bindkey {
 	my ($self, $key, $sub, $mode) = @_;
 	$mode ||= $$self{config}{default_mode};
 	$$self{keymaps}{$mode} ||= {};
-	$key = 'ctrl_'.uc($2) if $key =~ /^(\^|[cC]-)(.)$/; # translate notation
+	$key = 'meta_'.uc($1) if $key =~ /^[mM]-(.)$/;
+	$key = 'ctrl_'.uc($1) if $key =~ /^(?:\^|[cC]-)(.)$/;
 	$sub =~ tr/-/_/ unless ref $sub;
 	$$self{keymaps}{$mode}{$key} = $sub;
 }
@@ -321,6 +329,8 @@ sub draw {
 	$self->print(\@lines, \@pos);
 }
 
+*redraw_current_line = \&draw;
+
 # ############ #
 # Internal api #
 # ############ #
@@ -342,7 +352,7 @@ sub switch_mode {
 		bless $self, $class;
 		$$self{keymaps}{$mode} = {
 			%{ $$self{keymaps}{$mode} },
-			%{ $self->keymap($mode)    }
+			%{ $self->keymap($mode)   }
 		} if UNIVERSAL::can($class, 'keymap');
 		$$self{keymaps}{$mode}{_class} ||= $class;
 	}
@@ -478,7 +488,14 @@ sub accept_line {
 	}
 	else { $$self{_loop} = 0 }
 }
+
 *return = \&accept_line;
+
+sub operate_and_get_next {
+	my $self = shift;
+	$$self{prev_hist_p} = $$self{hist_p};
+	$$self{_loop} = 0;
+}
 
 sub return_eof_maybe {
 	length( join "\n", @{$_[0]{lines}} )
@@ -486,9 +503,9 @@ sub return_eof_maybe {
 		: ( $_[0]{_loop} = undef ) ;
 }
 
-sub return_eof { @{$_[0]}{'lines', '_loop'} = ([], undef) }
+sub return_eof { $_[0]{_loop} = undef }
 
-sub return_empty_string { @{$_[0]}{'lines', '_loop'} = ([], 0) }
+sub return_empty_string { $_[0]{_loop} = '' }
 
 sub delete_char {
 	my $self = shift;
@@ -666,8 +683,6 @@ sub unix_word_rubout {
 	$$self{lines}[ $$self{pos}[1] ] = $pre . $$self{lines}[ $$self{pos}[1] ];
 }
 
-sub clear_screen { $_[0]->cls() }
-
 sub kill_line {
 	my $self = shift;
 	$$self{lines}[ $$self{pos}[1] ] = substr $$self{lines}[ $$self{pos}[1] ], 0, $$self{pos}[0];
@@ -825,6 +840,11 @@ option.
 To enter the real multiline editing mode, press 'escape m',
 see L<Term::ReadLine::Zoid::MultiLine>.
 
+=item ^O  (I<operate_and_get_next>)
+
+Return the current buffer to the application but remember where we are in history.
+This can be used to quickly (re-)execute series of commands from history.
+
 =item ^K  (I<kill_line>)
 
 Delete from cursor to the end of the line.
@@ -924,6 +944,11 @@ End editing and return C<undef> if the buffer is completely empty.
 
 Like I<complete> but only shows the completions without
 actually doing them.
+
+=item I<redraw_current_line>
+
+Redraw the current line. This is done all the time automaticly 
+so you'll almost never need to call this one explicitly.
 
 =back
 

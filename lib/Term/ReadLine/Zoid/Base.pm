@@ -6,7 +6,7 @@ use Term::ReadKey qw/ReadMode ReadKey GetTerminalSize/;
 #use encoding 'utf8';
 no warnings; # undef == '' down here
 
-our $VERSION = '0.05';
+our $VERSION = '0.06';
 
 $| = 1;
 
@@ -152,7 +152,7 @@ sub do_key {
 	my ($self, $key) = (shift, shift);
 	$key = $self->read_key() unless length $key;
 
-	# translate ord
+	# $self->key_name()
 	if (exists $chr_names{$key}) { $key = $chr_names{$key} }
 	elsif (length $key < 2) {
 		my $ord = ord $key;
@@ -160,6 +160,7 @@ sub do_key {
 			: ($ord == 127) ? 'ctrl_?' : $key ;
 	}
 
+	# $self->key_binding
 	my $map = $$self{keymaps}{$$self{mode}};
 	my $sub;
 	DO_KEY:
@@ -171,6 +172,7 @@ sub do_key {
 	}
 	elsif (exists $$map{_default}) { $sub = $$map{_default} }
 	else { $sub = 'bell' }
+
 	#print STDERR "# key: $key sub: $sub\n";
 	my $re = ref($sub) ? $sub->($self, $key, @_) : $self->$sub($key, @_) ;
 	$$self{last_key} = $key;
@@ -235,7 +237,30 @@ sub print {
 
 sub TermSize { (GetTerminalSize($_[0]{IN}))[0,1] }
 
-sub key_name { return exists($chr_names{$_[1]}) ? $chr_names{$_[1]} : $_[1] }
+sub key_name {
+	if (exists $chr_names{$_[1]}) { return $chr_names{$_[1]} }
+	elsif (length $_[1] < 2) {
+		my $ord = ord $_[1];
+		return	  ($ord < 32)   ? 'ctrl_'  . (chr $ord + 64)
+			: ($ord == 127) ? 'ctrl_?' : $_[1] ;
+	}
+	else { return $_[1] }
+}
+
+sub key_binding {
+	my ($self, $key, $mode) = @_;
+	$mode ||= $$self{mode};
+
+	my $map = $$self{keymaps}{$mode};
+	FIND_KEY:
+	if (exists $$map{$key}) { return $$map{$key} }
+	elsif (exists $$map{_isa}) {
+		$map = $$self{keymaps}{ $$map{_isa} }
+			|| return warn "$$map{_isa}: no such keymap\n\n";
+		goto FIND_KEY;
+	}
+	else { return undef }
+}
 
 sub press {
 	my $self = shift;
@@ -468,6 +493,10 @@ Unshifts characters on the read buffer, arguments the same as C<press()>.
 =item C<key_name($chr)>
 
 Returns a name for a character or character sequence.
+
+=item C<key_binding($key, $mode)>
+
+Returns the keybinding for C<$key> in C<$mode>, mode defaults to the current one.
 
 =item C<bindchr($chr, $key)>
 

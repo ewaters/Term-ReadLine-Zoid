@@ -4,7 +4,7 @@ use strict;
 use base 'Term::ReadLine::Zoid';
 no warnings; # undef == '' down here
 
-our $VERSION = 0.05;
+our $VERSION = 0.06;
 
 our %_keymap = (
 	backspace  => 'backward_delete_char',
@@ -65,7 +65,7 @@ sub draw { # rendering this inc mode is kinda consuming
 
 sub self_insert {
 	if ($_[0]{is_lock}) { $_[0]->bell }
-	elsif (exists $_[0]{keymaps}{ $_[0]{config}{default_mode} }{$_[1]}) {
+	elsif ($_[0]->key_binding($_[1], $_[0]{config}{default_mode})) {
 		goto \&is_switch_back;
 	}
 	else { goto \&Term::ReadLine::Zoid::self_insert }
