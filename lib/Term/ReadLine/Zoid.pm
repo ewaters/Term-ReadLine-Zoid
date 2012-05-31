@@ -343,25 +343,35 @@ sub switch_mode {
 		$mode = 'insert'; # hardcoded fallback
 	}
 	$$self{mode} = $mode;
+
 	if (my $class = delete $$self{keymaps}{$mode}{_use}) { # bootstrap
+		# We haven't yet loaded in the subclass; do that now
 		eval "use $class";
 		if ($@) {
 			$$self{keymaps}{$mode}{_use} = $class; # put it back
 			die $@;
 		}
+
+		# Rebless $self into the new mode subclass
 		bless $self, $class;
+
+		# Add onto $self->{keymaps}{$mode} all the subclass keymaps (from keymap())
 		$$self{keymaps}{$mode} = {
 			%{ $$self{keymaps}{$mode} },
 			%{ $self->keymap($mode)   }
 		} if UNIVERSAL::can($class, 'keymap');
+
+		# Store the class name (was '_use')
 		$$self{keymaps}{$mode}{_class} ||= $class;
 	}
 	else {
+		# We've been this subclass before; rebless ourselves into the subclass
 		my $class = $$self{keymaps}{$mode}{_class} || $$self{class};
 		#print STDERR "class: $class\n";
 		bless $self, $class;
 	}
 
+	# Call the on_switch method
 	if (exists $$self{keymaps}{$mode}{_on_switch}) {
 		my $sub = $$self{keymaps}{$mode}{_on_switch};
 		return ref($sub) ? $sub->($self, @args) : $self->$sub(@args) ;

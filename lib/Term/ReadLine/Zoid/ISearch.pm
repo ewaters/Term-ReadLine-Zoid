@@ -71,7 +71,12 @@ sub self_insert {
 	else { goto \&Term::ReadLine::Zoid::self_insert }
 }
 
-sub isearch_again { $_[0]{is_hist_p} = $_[0]{last_search}[-1] if $_[0]{last_search} }
+sub isearch_again {
+	my $self = shift;
+	if ($self->{last_search}) {
+		$self->{is_hist_p} = $self->{last_search}[-1];
+	}
+}
 
 1;
 
