@@ -64,11 +64,16 @@ sub draw { # rendering this inc mode is kinda consuming
 }
 
 sub self_insert {
-	if ($_[0]{is_lock}) { $_[0]->bell }
-	elsif ($_[0]->key_binding($_[1], $_[0]{config}{default_mode})) {
+	my ($self, $chr) = @_;
+	if ($self->{is_lock} && $chr !~ /^ctrl_/) {
+		$self->bell;
+	}
+	elsif ($self->key_binding($chr, $self->{config}{default_mode})) {
 		goto \&is_switch_back;
 	}
-	else { goto \&Term::ReadLine::Zoid::self_insert }
+	else {
+		goto \&Term::ReadLine::Zoid::self_insert;
+	}
 }
 
 sub isearch_again {
