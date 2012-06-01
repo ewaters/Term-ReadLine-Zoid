@@ -284,6 +284,10 @@ sub draw {
 		}ge;
 	}
 
+	if (my $sub = $self->{config}{lines_preprocess_function}) {
+		$sub->(\@lines, \@pos);
+	}
+
 	# format PS1
 	my $prompt = ref($$self{prompt}) ? ${$$self{prompt}} : $$self{prompt};
 	$prompt =~ s/(!!)|!/$1?'!':$$self{hist_cnt}/eg;
@@ -317,7 +321,7 @@ sub draw {
 
 	# format RPS1
 	if (my $rprompt = $$self{config}{RPS1}) {
-		$rprompt = $$rprompt if ref $rprompt;
+		$rprompt = ref $rprompt eq 'CODE' ? $rprompt->() : ref $rprompt eq 'SCALAR' ? $$rprompt : $rprompt if ref $rprompt;
 		my $l = $self->print_length($lines[0]);
 		if ($rprompt and $l < $$self{term_size}[0]) {
 			$rprompt = substr $rprompt, - $$self{term_size}[0] + $l - 1;
